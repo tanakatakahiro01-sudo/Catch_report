@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="過去の釣果投稿をポイント、魚種、月ごとに集計して表示する統計サイト"
+    >
+    <meta name="robots" content="noindex, nofollow">
+    <title>釣果アーカイブ</title>
+    <link href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css?v=20260621-static-export">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#/" aria-label="釣果アーカイブ トップ">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40" role="img">
+            <path d="M7 21c7-9 17-11 26-3-8 10-18 11-26 3Z"></path>
+            <path d="m8 21-5-5v10l5-5Z"></path>
+            <circle cx="28" cy="18" r="1.5"></circle>
+          </svg>
+        </span>
+        <span>
+          <strong>釣果アーカイブ</strong>
+          <small>FISHING DATA MAP</small>
+        </span>
+      </a>
+      <div id="header-controls" class="header-controls" aria-label="検索条件"></div>
+    </header>
+
+    <main id="app" tabindex="-1"></main>
+
+    <script src="https://unpkg.com/maplibre-gl/dist/maplibre-gl.js"></script>
+    <script src="./app.js?v=20260621-static-export"></script>
+  </body>
+</html>

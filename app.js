@@ -1,0 +1,1089 @@
+const app = document.querySelector("#app");
+const headerControls = document.querySelector("#header-controls");
+const numberFormatter = new Intl.NumberFormat("ja-JP");
+const ENABLE_FISH_ILLUSTRATIONS = true;
+const APP_ASSET_VERSION = "20260621-static-v2";
+const STATIC_STATISTICS_URL = new URL(
+  `./data/statistics.json?v=${APP_ASSET_VERSION}`,
+  window.location.href
+).toString();
+const STATIC_ILLUSTRATIONS_URL = new URL(
+  `./data/fish_illustrations.json?v=${APP_ASSET_VERSION}`,
+  window.location.href
+).toString();
+const API_STATISTICS_URL = new URL("./api/statistics", window.location.href).toString();
+let SPOTS = [];
+let CATCH_RECORDS = [];
+let SPOT_TOTAL_COUNTS = new Map();
+let FISH_ILLUSTRATION_PATHS = {};
+let selectedSpotId = null;
+
+const state = {
+  fish: "all",
+  month: "all",
+  minSpotCount: 100,
+  satelliteMap: false
+};
+
+const mapView = {
+  zoom: 1,
+  centerX: 380,
+  centerY: 310
+};
+const MAP_MAX_ZOOM = 256;
+const TILE_SIZE = 256;
+const AERIAL_TILE_URL = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg";
+const MAP_STYLE_URLS = {
+  outdoors: "https://tiles.stadiamaps.com/styles/outdoors.json",
+  satellite: "https://tiles.stadiamaps.com/styles/alidade_satellite.json"
+};
+const MAIN_MAP_FRAME = { x: 165, y: 20, width: 570, height: 570 };
+const MAIN_MAP_BOUNDS = { minLng: 128, maxLng: 146.5, minLat: 30, maxLat: 46 };
+const AERIAL_MAP_FRAME = { x: 0, y: 0, width: 760, height: 620 };
+const AERIAL_MAP_BOUNDS = { minLng: 122.5, maxLng: 154, minLat: 20, maxLat: 46 };
+let mapZoomAnimation = null;
+let mapResizeAnimation = null;
+let activeMap = null;
+let mapCameraState = null;
+
+let fishNames = [];
+
+function formatCount(value) {
+  return numberFormatter.format(value);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function fishIllustrationUrl(name) {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120" role="img" aria-label="${name}">
+      <rect width="160" height="120" rx="18" fill="#f7f5ee"/>
+      <g transform="translate(26 22)" fill="none" stroke="#173b3c" stroke-linecap="round" stroke-linejoin="round">
+        <path stroke-width="6.4" d="M20 40c22-29 54-35 84-10-26 31-58 36-84 10Z"></path>
+        <path stroke-width="6.4" d="m23 40-15-15v30l15-15Z"></path>
+        <circle cx="85" cy="30" r="4.2" fill="#173b3c" stroke="none"></circle>
+      </g>
+    </svg>
+  `.trim();
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function currentTargetIllustrationUrl(name) {
+  return FISH_ILLUSTRATION_PATHS[name] || fishIllustrationUrl(name);
+}
+
+function removeActiveMap() {
+  if (!activeMap) return;
+  mapCameraState = {
+    center: activeMap.getCenter().toArray(),
+    zoom: activeMap.getZoom(),
+    bearing: activeMap.getBearing(),
+    pitch: activeMap.getPitch()
+  };
+  activeMap.remove();
+  activeMap = null;
+}
+
+function setHeaderControlsVisible(visible) {
+  headerControls.hidden = !visible;
+  if (!visible) headerControls.innerHTML = "";
+}
+
+function setPageScrollLocked(locked) {
+  document.body.classList.toggle("map-scroll-locked", locked);
+}
+
+window.addEventListener(
+  "resize",
+  () => {
+    if (mapResizeAnimation) cancelAnimationFrame(mapResizeAnimation);
+    mapResizeAnimation = requestAnimationFrame(() => {
+      mapResizeAnimation = null;
+      if (activeMap) activeMap.resize();
+      updateMapView();
+    });
+  },
+  { passive: true }
+);
+
+function recordsForSpot(spotId) {
+  const spot = SPOTS.find((item) => item.id === spotId);
+  if (!spot) return [];
+  return CATCH_RECORDS.filter((record) => record.spot_id === spotId);
+}
+
+function sumCounts(records) {
+  return records.reduce((sum, record) => sum + record.count, 0);
+}
+
+function filteredRecords() {
+  return CATCH_RECORDS.filter((record) => {
+    const matchesFish = state.fish === "all" || record.fish_name === state.fish;
+    const matchesMonth = state.month === "all" || record.month === Number(state.month);
+    return matchesFish && matchesMonth;
+  });
+}
+
+function aggregateSpots(records) {
+  const counts = new Map();
+  records.forEach((record) => {
+    counts.set(record.spot_id, (counts.get(record.spot_id) || 0) + record.count);
+  });
+  return SPOTS.filter(
+    (spot) => counts.has(spot.id) && (SPOT_TOTAL_COUNTS.get(spot.id) || 0) >= state.minSpotCount
+  ).map((spot) => ({
+    ...spot,
+    count: counts.get(spot.id),
+    totalCount: SPOT_TOTAL_COUNTS.get(spot.id) || 0
+  }));
+}
+
+function projectPoint(lat, lng) {
+  let bounds = MAIN_MAP_BOUNDS;
+  let frame = MAIN_MAP_FRAME;
+
+  if (lat < 30 && lng < 133) {
+    bounds = { minLng: 122.5, maxLng: 131, minLat: 23.5, maxLat: 30 };
+    frame = { x: 20, y: 465, width: 145, height: 125 };
+  } else if (lat < 30 || lng > 146.5) {
+    bounds = { minLng: 136, maxLng: 154, minLat: 20, maxLat: 30 };
+    frame = { x: 20, y: 55, width: 145, height: 90 };
+  }
+
+  return {
+    x: frame.x + ((lng - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * frame.width,
+    y: frame.y + ((bounds.maxLat - lat) / (bounds.maxLat - bounds.minLat)) * frame.height
+  };
+}
+
+function svgPointToLatLng(x, y, frame = MAIN_MAP_FRAME, bounds = MAIN_MAP_BOUNDS) {
+  return {
+    lat:
+      bounds.maxLat - ((y - frame.y) / frame.height) * (bounds.maxLat - bounds.minLat),
+    lng:
+      bounds.minLng + ((x - frame.x) / frame.width) * (bounds.maxLng - bounds.minLng)
+  };
+}
+
+function latLngToWorldPixel(lat, lng, zoom) {
+  const sinLat = Math.sin((Math.max(-85.05112878, Math.min(85.05112878, lat)) * Math.PI) / 180);
+  const scale = TILE_SIZE * 2 ** zoom;
+  return {
+    x: ((lng + 180) / 360) * scale,
+    y: (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * scale
+  };
+}
+
+function aerialTileZoom() {
+  return Math.max(5, Math.min(11, Math.round(5 + Math.log2(mapView.zoom) * 0.72)));
+}
+
+function aerialTileUrl(zoom, x, y) {
+  return AERIAL_TILE_URL.replace("{z}", zoom).replace("{x}", x).replace("{y}", y);
+}
+
+function aerialPointToSvg(lat, lng, view, worldNorthWest, worldWidth, worldHeight, zoom) {
+  const worldPoint = latLngToWorldPixel(lat, lng, zoom);
+  return {
+    x: view.x + ((worldPoint.x - worldNorthWest.x) / worldWidth) * view.width,
+    y: view.y + ((worldPoint.y - worldNorthWest.y) / worldHeight) * view.height
+  };
+}
+
+function markerRadius() {
+  return 18;
+}
+
+function markerColor(count, colorRanks) {
+  const colors = ["#2c7bb6", "#00a6ca", "#f9d057", "#f28e2b", "#d62828"];
+  if (colorRanks.size === 1) return colors[2];
+  const ratio = colorRanks.get(count) / (colorRanks.size - 1);
+  const index = Math.min(colors.length - 1, Math.floor(ratio * colors.length));
+  return colors[index];
+}
+
+function mapViewBox() {
+  const width = 760 / mapView.zoom;
+  const height = 620 / mapView.zoom;
+  const x = Math.max(0, Math.min(760 - width, mapView.centerX - width / 2));
+  const y = Math.max(0, Math.min(620 - height, mapView.centerY - height / 2));
+  mapView.centerX = x + width / 2;
+  mapView.centerY = y + height / 2;
+  return { x, y, width, height };
+}
+
+function markerScreenRadius(baseRadius) {
+  const scale = Math.min(1, 0.16 + Math.log2(mapView.zoom) * 0.21);
+  return Math.max(2.5, baseRadius * scale);
+}
+
+function updateLabelPositions(map) {
+  map.querySelectorAll(".spot-label").forEach((label) => {
+    const radius = markerScreenRadius(Number(label.dataset.baseRadius));
+    const offset = (radius + 7) / mapView.zoom;
+    const lineHeight = 13 / mapView.zoom;
+    const x = Number(label.dataset.x);
+    const y = Number(label.dataset.y);
+    const placement = Number(label.dataset.placement) % 4;
+    if (placement === 0) {
+      label.setAttribute("x", (x + offset).toFixed(2));
+      label.setAttribute("y", (y + 4 / mapView.zoom).toFixed(2));
+      label.setAttribute("text-anchor", "start");
+    } else if (placement === 1) {
+      label.setAttribute("x", (x - offset).toFixed(2));
+      label.setAttribute("y", (y + 4 / mapView.zoom).toFixed(2));
+      label.setAttribute("text-anchor", "end");
+    } else if (placement === 2) {
+      label.setAttribute("x", x.toFixed(2));
+      label.setAttribute("y", (y - offset).toFixed(2));
+      label.setAttribute("text-anchor", "middle");
+    } else {
+      label.setAttribute("x", x.toFixed(2));
+      label.setAttribute("y", (y + offset + lineHeight).toFixed(2));
+      label.setAttribute("text-anchor", "middle");
+    }
+    label.setAttribute("font-size", (11 / mapView.zoom).toFixed(2));
+    label.setAttribute("stroke-width", (3 / mapView.zoom).toFixed(2));
+  });
+}
+
+function updateStandardMarkerPositions(map) {
+  map.querySelectorAll(".spot-marker").forEach((marker) => {
+    marker.setAttribute("cx", marker.dataset.standardX);
+    marker.setAttribute("cy", marker.dataset.standardY);
+  });
+  map.querySelectorAll(".spot-label").forEach((label) => {
+    label.dataset.x = label.dataset.standardX;
+    label.dataset.y = label.dataset.standardY;
+  });
+}
+
+function updateMapView() {
+  const map = document.querySelector(".japan-map");
+  if (!map) return;
+
+  const view = mapViewBox();
+  map.setAttribute(
+    "viewBox",
+    `${view.x.toFixed(2)} ${view.y.toFixed(2)} ${view.width.toFixed(2)} ${view.height.toFixed(2)}`
+  );
+  map.querySelectorAll(".spot-marker").forEach((marker) => {
+    const radius = markerScreenRadius(Number(marker.dataset.baseRadius));
+    marker.setAttribute("r", (radius / mapView.zoom).toFixed(5));
+  });
+  map.classList.toggle("show-spot-labels", mapView.zoom >= 8);
+  if (state.mapLayer === "aerial") {
+    updateAerialTiles(view);
+  } else {
+    updateStandardMarkerPositions(map);
+    updateLabelPositions(map);
+    updateAerialTiles(view);
+  }
+}
+
+function updateAerialTiles(view = mapViewBox()) {
+  const layer = document.querySelector(".aerial-tile-layer");
+  const map = document.querySelector(".japan-map");
+  if (!layer || !map) return;
+
+  layer.hidden = state.mapLayer !== "aerial";
+  map.classList.toggle("is-aerial-mode", state.mapLayer === "aerial");
+  if (state.mapLayer !== "aerial") {
+    layer.replaceChildren();
+    layer.dataset.tileKey = "";
+    return;
+  }
+
+  const rect = map.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+
+  const northWest = svgPointToLatLng(view.x, view.y, AERIAL_MAP_FRAME, AERIAL_MAP_BOUNDS);
+  const southEast = svgPointToLatLng(
+    view.x + view.width,
+    view.y + view.height,
+    AERIAL_MAP_FRAME,
+    AERIAL_MAP_BOUNDS
+  );
+  const zoom = aerialTileZoom();
+  const worldNorthWest = latLngToWorldPixel(northWest.lat, northWest.lng, zoom);
+  const worldSouthEast = latLngToWorldPixel(southEast.lat, southEast.lng, zoom);
+  const worldWidth = Math.max(1, worldSouthEast.x - worldNorthWest.x);
+  const worldHeight = Math.max(1, worldSouthEast.y - worldNorthWest.y);
+  map.querySelectorAll(".spot-marker").forEach((marker) => {
+    const point = aerialPointToSvg(
+      Number(marker.dataset.lat),
+      Number(marker.dataset.lng),
+      view,
+      worldNorthWest,
+      worldWidth,
+      worldHeight,
+      zoom
+    );
+    marker.setAttribute("cx", point.x.toFixed(2));
+    marker.setAttribute("cy", point.y.toFixed(2));
+  });
+  map.querySelectorAll(".spot-label").forEach((label) => {
+    const point = aerialPointToSvg(
+      Number(label.dataset.lat),
+      Number(label.dataset.lng),
+      view,
+      worldNorthWest,
+      worldWidth,
+      worldHeight,
+      zoom
+    );
+    label.dataset.x = point.x.toFixed(2);
+    label.dataset.y = point.y.toFixed(2);
+  });
+  updateLabelPositions(map);
+  const maxTile = 2 ** zoom;
+  const minTileX = Math.floor(worldNorthWest.x / TILE_SIZE) - 1;
+  const maxTileX = Math.floor(worldSouthEast.x / TILE_SIZE) + 1;
+  const minTileY = Math.max(0, Math.floor(worldNorthWest.y / TILE_SIZE) - 1);
+  const maxTileY = Math.min(maxTile - 1, Math.floor(worldSouthEast.y / TILE_SIZE) + 1);
+  const tileKey = [
+    zoom,
+    minTileX,
+    maxTileX,
+    minTileY,
+    maxTileY,
+    Math.round(worldNorthWest.x),
+    Math.round(worldNorthWest.y),
+    Math.round(worldWidth),
+    Math.round(worldHeight),
+    Math.round(rect.width),
+    Math.round(rect.height)
+  ].join(":");
+  if (layer.dataset.tileKey === tileKey) return;
+  layer.dataset.tileKey = tileKey;
+
+  const fragment = document.createDocumentFragment();
+  for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+    const wrappedTileX = ((tileX % maxTile) + maxTile) % maxTile;
+    for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+      const image = document.createElement("img");
+      image.src = aerialTileUrl(zoom, wrappedTileX, tileY);
+      image.alt = "";
+      image.loading = "lazy";
+      image.decoding = "async";
+      image.style.left = `${((tileX * TILE_SIZE - worldNorthWest.x) / worldWidth) * rect.width}px`;
+      image.style.top = `${((tileY * TILE_SIZE - worldNorthWest.y) / worldHeight) * rect.height}px`;
+      image.style.width = `${(TILE_SIZE / worldWidth) * rect.width + 1}px`;
+      image.style.height = `${(TILE_SIZE / worldHeight) * rect.height + 1}px`;
+      fragment.appendChild(image);
+    }
+  }
+  layer.replaceChildren(fragment);
+}
+
+function setMapZoom(nextZoom, focusX = mapView.centerX, focusY = mapView.centerY) {
+  if (mapZoomAnimation) {
+    cancelAnimationFrame(mapZoomAnimation);
+    mapZoomAnimation = null;
+  }
+  const previous = mapViewBox();
+  const zoom = Math.max(1, Math.min(MAP_MAX_ZOOM, nextZoom));
+  if (zoom === mapView.zoom) return;
+
+  const nextWidth = 760 / zoom;
+  const nextHeight = 620 / zoom;
+  const relativeX = (focusX - previous.x) / previous.width;
+  const relativeY = (focusY - previous.y) / previous.height;
+  mapView.zoom = zoom;
+  mapView.centerX = focusX + (0.5 - relativeX) * nextWidth;
+  mapView.centerY = focusY + (0.5 - relativeY) * nextHeight;
+  updateMapView();
+}
+
+function animateMapZoom(nextZoom, focusX = mapView.centerX, focusY = mapView.centerY) {
+  if (mapZoomAnimation) cancelAnimationFrame(mapZoomAnimation);
+
+  const previous = mapViewBox();
+  const start = {
+    zoom: mapView.zoom,
+    centerX: mapView.centerX,
+    centerY: mapView.centerY
+  };
+  const zoom = Math.max(1, Math.min(MAP_MAX_ZOOM, nextZoom));
+  if (zoom === start.zoom) return;
+
+  const nextWidth = 760 / zoom;
+  const nextHeight = 620 / zoom;
+  const relativeX = (focusX - previous.x) / previous.width;
+  const relativeY = (focusY - previous.y) / previous.height;
+  const target = {
+    centerX: focusX + (0.5 - relativeX) * nextWidth,
+    centerY: focusY + (0.5 - relativeY) * nextHeight
+  };
+  const startedAt = performance.now();
+  const duration = 180;
+
+  const tick = (now) => {
+    const progress = Math.min(1, (now - startedAt) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    mapView.zoom = start.zoom * Math.pow(zoom / start.zoom, eased);
+    mapView.centerX = start.centerX + (target.centerX - start.centerX) * eased;
+    mapView.centerY = start.centerY + (target.centerY - start.centerY) * eased;
+    updateMapView();
+    if (progress < 1) {
+      mapZoomAnimation = requestAnimationFrame(tick);
+    } else {
+      mapZoomAnimation = null;
+    }
+  };
+
+  mapZoomAnimation = requestAnimationFrame(tick);
+}
+
+function selectOptions(values, selected, allLabel) {
+  return [
+    `<option value="all"${selected === "all" ? " selected" : ""}>${allLabel}</option>`,
+    ...values.map(
+      (value) =>
+        `<option value="${value}"${selected === String(value) ? " selected" : ""}>${value}</option>`
+    )
+  ].join("");
+}
+
+function currentMapStyleUrl() {
+  return state.satelliteMap ? MAP_STYLE_URLS.satellite : MAP_STYLE_URLS.outdoors;
+}
+
+function mapAttributionMarkup() {
+  const base = `
+    <a href="https://stadiamaps.com/" target="_blank" rel="noreferrer">© Stadia Maps</a>
+    <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">© OpenMapTiles</a>
+    <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap</a>
+  `;
+  if (!state.satelliteMap) return base;
+  return `
+    ${base}
+    <span>© CNES, Distribution Airbus DS, © Airbus DS, © PlanetObserver (Contains Copernicus Data)</span>
+  `;
+}
+
+function renderMapLibreMap(spotResults, colorRanks) {
+  const container = document.querySelector("#catch-map");
+  if (!container) return;
+  if (!window.maplibregl) {
+    container.innerHTML = `
+      <div class="empty-state map-load-error">
+        <strong>地図ライブラリを読み込めませんでした</strong>
+        <span>インターネット接続を確認してください。</span>
+      </div>
+    `;
+    return;
+  }
+
+  const features = spotResults
+    .filter((spot) => Number.isFinite(Number(spot.lat)) && Number.isFinite(Number(spot.lng)))
+    .map((spot) => ({
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [Number(spot.lng), Number(spot.lat)]
+      },
+      properties: {
+        id: String(spot.id),
+        name: spot.spot_name,
+        count: spot.count,
+        totalCount: spot.totalCount,
+        color: markerColor(spot.count, colorRanks)
+      }
+    }));
+  const featureCollection = {
+    type: "FeatureCollection",
+    features
+  };
+
+  const addCatchLayers = () => {
+    if (!activeMap || !activeMap.isStyleLoaded()) return;
+
+    if (activeMap.getLayer("catch-spot-labels")) activeMap.removeLayer("catch-spot-labels");
+    if (activeMap.getLayer("catch-spots")) activeMap.removeLayer("catch-spots");
+    if (activeMap.getLayer("catch-spots-halo")) activeMap.removeLayer("catch-spots-halo");
+    if (activeMap.getSource("catch-spots")) activeMap.removeSource("catch-spots");
+
+    activeMap.addSource("catch-spots", {
+      type: "geojson",
+      data: featureCollection
+    });
+
+    activeMap.addLayer({
+      id: "catch-spots-halo",
+      type: "circle",
+      source: "catch-spots",
+      paint: {
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          4,
+          5,
+          8,
+          7,
+          12,
+          10,
+          16,
+          14
+        ],
+        "circle-color": "#ffffff",
+        "circle-opacity": 0.9
+      }
+    });
+
+    activeMap.addLayer({
+      id: "catch-spots",
+      type: "circle",
+      source: "catch-spots",
+      paint: {
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          4,
+          3.8,
+          8,
+          5.5,
+          12,
+          8,
+          16,
+          11
+        ],
+        "circle-color": ["get", "color"],
+        "circle-stroke-color": "rgba(23, 59, 60, 0.38)",
+        "circle-stroke-width": 1.2,
+        "circle-opacity": 0.94
+      }
+    });
+
+    activeMap.addLayer({
+      id: "catch-spot-labels",
+      type: "symbol",
+      source: "catch-spots",
+      minzoom: 9,
+      layout: {
+        "text-field": ["get", "name"],
+        "text-size": 12,
+        "text-offset": [0, 1.15],
+        "text-anchor": "top",
+        "text-allow-overlap": false
+      },
+      paint: {
+        "text-color": "#173b3c",
+        "text-halo-color": "#fffef9",
+        "text-halo-width": 1.6
+      }
+    });
+  };
+
+  activeMap = new maplibregl.Map({
+    container,
+    style: currentMapStyleUrl(),
+    center: mapCameraState?.center || [137.8, 37.2],
+    zoom: mapCameraState?.zoom ?? 4.7,
+    bearing: mapCameraState?.bearing ?? 0,
+    pitch: mapCameraState?.pitch ?? 0,
+    minZoom: 4,
+    maxZoom: 16,
+    attributionControl: false
+  });
+
+  activeMap.on("load", () => {
+    addCatchLayers();
+
+    if (!mapCameraState && features.length > 0) {
+      const bounds = new maplibregl.LngLatBounds();
+      features.forEach((feature) => bounds.extend(feature.geometry.coordinates));
+      activeMap.fitBounds(bounds, {
+        padding: { top: 70, right: 40, bottom: 70, left: 40 },
+        maxZoom: 8,
+        duration: 0
+      });
+    }
+  });
+
+  activeMap.on("style.load", addCatchLayers);
+  activeMap.on("moveend", () => {
+    mapCameraState = {
+      center: activeMap.getCenter().toArray(),
+      zoom: activeMap.getZoom(),
+      bearing: activeMap.getBearing(),
+      pitch: activeMap.getPitch()
+    };
+  });
+
+  activeMap.on("click", "catch-spots", (event) => {
+    const feature = event.features?.[0];
+    if (!feature?.properties?.id) return;
+    selectedSpotId = String(feature.properties.id);
+    renderSpotBottomSheet();
+  });
+
+  activeMap.on("mouseenter", "catch-spots", () => {
+    activeMap.getCanvas().style.cursor = "pointer";
+  });
+
+  activeMap.on("mouseleave", "catch-spots", () => {
+    activeMap.getCanvas().style.cursor = "";
+  });
+}
+
+function renderMapScreen() {
+  setPageScrollLocked(true);
+  const records = filteredRecords();
+  const spotResults = aggregateSpots(records);
+  const spotCounts = spotResults.map((spot) => spot.count);
+  const colorRanks = new Map(
+    [...new Set(spotCounts)].sort((a, b) => a - b).map((count, index) => [count, index])
+  );
+  removeActiveMap();
+  selectedSpotId = null;
+
+  app.innerHTML = `
+    <section class="map-page">
+      <section class="map-shell" aria-label="日本地図と釣りポイント">
+        <div class="map-canvas">
+          <div id="catch-map" class="catch-map" aria-label="釣果ポイント地図"></div>
+          <div class="map-attribution" aria-label="地図データの帰属表示">
+            ${mapAttributionMarkup()}
+          </div>
+          <div class="color-legend map-legend-overlay" aria-label="マーカーの色は釣果件数を表します">
+            <span class="legend-title">釣果件数</span>
+            <div class="legend-scale" aria-hidden="true">
+              <span>少ない</span>
+              <i class="legend-swatch level-1"></i>
+              <i class="legend-swatch level-2"></i>
+              <i class="legend-swatch level-3"></i>
+              <i class="legend-swatch level-4"></i>
+              <i class="legend-swatch level-5"></i>
+              <span>多い</span>
+            </div>
+          </div>
+          ${
+            spotResults.length === 0
+              ? `<div class="empty-state"><strong>該当するデータがありません</strong><span>条件を変更して確認してください。</span></div>`
+              : ""
+          }
+          <div id="spot-bottom-sheet" class="spot-bottom-sheet" hidden></div>
+        </div>
+      </section>
+    </section>
+  `;
+
+  updateHeaderResultCount(spotResults.length);
+  renderMapLibreMap(spotResults, colorRanks);
+  renderSpotBottomSheet();
+}
+
+function renderHeaderControls() {
+  headerControls.innerHTML = `
+    <div class="filter-fields">
+      <button
+        class="map-toggle-button${state.satelliteMap ? " is-active" : ""}"
+        id="map-satellite-toggle"
+        type="button"
+        aria-pressed="${state.satelliteMap ? "true" : "false"}"
+      >
+        航空 <span>${state.satelliteMap ? "ON" : "OFF"}</span>
+      </button>
+      <label>
+        <span>魚種</span>
+        <select id="fish-filter">
+          ${selectOptions(fishNames, state.fish, "すべての魚種")}
+        </select>
+      </label>
+      <label>
+        <span>月</span>
+        <select id="month-filter">
+          ${selectOptions(
+            Array.from({ length: 12 }, (_, index) => `${index + 1}月`),
+            state.month === "all" ? "all" : `${state.month}月`,
+            "すべての月"
+          )}
+        </select>
+      </label>
+      <button class="reset-button" id="reset-filters" type="button">条件をクリア</button>
+    </div>
+    <p class="filter-result-count" id="filter-result-count"></p>
+  `;
+
+  document.querySelector("#map-satellite-toggle").addEventListener("click", (event) => {
+    state.satelliteMap = !state.satelliteMap;
+    renderHeaderControls();
+    renderMapScreen();
+  });
+  document.querySelector("#fish-filter").addEventListener("change", (event) => {
+    state.fish = event.target.value;
+    renderMapScreen();
+  });
+  document.querySelector("#month-filter").addEventListener("change", (event) => {
+    state.month = event.target.value === "all" ? "all" : event.target.value.replace("月", "");
+    renderMapScreen();
+  });
+  document.querySelector("#reset-filters").addEventListener("click", () => {
+    state.fish = "all";
+    state.month = "all";
+    renderHeaderControls();
+    renderMapScreen();
+  });
+}
+
+function updateHeaderResultCount(count) {
+  const result = document.querySelector("#filter-result-count");
+  if (result) result.textContent = `表示ポイント: ${formatCount(count)}件`;
+}
+
+function aggregateFish(records) {
+  const totals = new Map();
+  records.forEach((record) => {
+    totals.set(record.fish_name, (totals.get(record.fish_name) || 0) + record.count);
+  });
+  return [...totals.entries()]
+    .map(([fish, count]) => ({ fish, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function countFor(records, fish, month) {
+  return sumCounts(
+    records.filter((record) => record.fish_name === fish && record.month === month)
+  );
+}
+
+function heatmapIntensity(count, maxCount) {
+  if (count === 0 || maxCount <= 0) return 0;
+  const normalized = count / maxCount;
+  const level = Math.max(1, Math.min(7, Math.ceil(Math.pow(normalized, 0.52) * 7)));
+  return [0, 0.08, 0.18, 0.32, 0.5, 0.68, 0.84, 1][level];
+}
+
+function renderSpotPopupContent(spotId) {
+  const spot = SPOTS.find((item) => item.id === spotId);
+  const records = recordsForSpot(spotId);
+  if (!spot || records.length === 0) return "";
+
+  const total = sumCounts(records);
+  const fishRanking = aggregateFish(records).slice(0, 5);
+  const heatmapMax = Math.max(...records.map((record) => record.count), 1);
+  const monthHeaders = Array.from({ length: 12 }, (_, index) => `<th>${index + 1}</th>`).join("");
+  const rows = fishRanking
+    .map((item) => {
+      const cells = Array.from({ length: 12 }, (_, index) => {
+        const month = index + 1;
+        const count = countFor(records, item.fish, month);
+        const intensity = heatmapIntensity(count, heatmapMax);
+        const toneClass = intensity >= 0.62 ? " is-strong" : "";
+        return `<td class="mini-heat-cell${toneClass}" style="--mini-intensity:${intensity.toFixed(
+          2
+        )}" aria-label="${escapeHtml(item.fish)} ${month}月 ${count}件">${count > 0 ? count : ""}</td>`;
+      }).join("");
+      return `
+        <tr>
+          <th scope="row">
+            <span class="mini-heat-fish">${escapeHtml(item.fish)}</span>
+            <span class="mini-heat-total">${formatCount(item.count)}件</span>
+          </th>
+          ${cells}
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <section class="spot-sheet-card">
+      <header class="spot-popup-header">
+        <div>
+          <p>${escapeHtml(spot.prefecture)}</p>
+          <h3>${escapeHtml(spot.spot_name)}</h3>
+        </div>
+        <strong>${formatCount(total)}件</strong>
+      </header>
+      <div class="spot-popup-heatmap">
+        <table class="mini-heatmap-table">
+          <thead>
+            <tr>
+              <th>魚種</th>
+              ${monthHeaders}
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <a class="spot-popup-link" href="#/spot/${encodeURIComponent(spotId)}">詳細を見る</a>
+    </section>
+  `;
+}
+
+function renderSpotBottomSheet() {
+  const container = document.querySelector("#spot-bottom-sheet");
+  if (!container) return;
+  if (!selectedSpotId) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  const content = renderSpotPopupContent(selectedSpotId);
+  if (!content) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = `
+    <div class="spot-sheet-backdrop" data-close-spot-sheet="true"></div>
+    <section class="spot-sheet" aria-label="ポイント概要">
+      <button class="spot-sheet-close" type="button" aria-label="閉じる" data-close-spot-sheet="true">×</button>
+      <div class="spot-sheet-handle" aria-hidden="true"></div>
+      ${content}
+    </section>
+  `;
+  container.querySelectorAll("[data-close-spot-sheet='true']").forEach((element) => {
+    element.addEventListener("click", () => {
+      selectedSpotId = null;
+      renderSpotBottomSheet();
+    });
+  });
+}
+
+function renderDetailScreen(spotId) {
+  setPageScrollLocked(false);
+  removeActiveMap();
+  setHeaderControlsVisible(false);
+  const spot = SPOTS.find((item) => item.id === spotId);
+  if (!spot) {
+    renderNotFound();
+    return;
+  }
+
+  const records = recordsForSpot(spotId);
+  const total = sumCounts(records);
+  const allFishRanking = aggregateFish(records);
+  const fishRanking = allFishRanking.slice(0, 10);
+  const currentMonth = new Date().getMonth() + 1;
+  const heatmapMax = Math.max(
+    ...records.map((record) => record.count),
+    1
+  );
+  const currentMonthRanking = allFishRanking
+    .map((item) => ({ fish: item.fish, count: countFor(records, item.fish, currentMonth) }))
+    .filter((item) => item.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  const heatmapRows = fishRanking
+    .map((item) => {
+      const monthCells = Array.from({ length: 12 }, (_, index) => {
+        const month = index + 1;
+        const count = countFor(records, item.fish, month);
+        const intensity = heatmapIntensity(count, heatmapMax);
+        const toneClass = intensity >= 0.62 ? " heat-cell-strong" : "";
+        return `<td class="heat-cell${toneClass}" style="--intensity:${intensity.toFixed(
+          2
+        )}" aria-label="${item.fish} ${month}月 ${count}件"><span class="heat-cell-fill" aria-hidden="true"></span><span class="heat-cell-value">${count}</span></td>`;
+      }).join("");
+      return `<tr><th scope="row"><span class="heatmap-fish-name">${item.fish}</span><span class="heatmap-fish-total">${formatCount(item.count)}件</span></th>${monthCells}</tr>`;
+    })
+    .join("");
+
+  const monthlyRows = Array.from({ length: 12 }, (_, index) => {
+    const month = index + 1;
+    const ranking = allFishRanking
+      .map((item) => ({ fish: item.fish, count: countFor(records, item.fish, month) }))
+      .filter((item) => item.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+    return `
+      <tr>
+        <th scope="row"><strong>${month}</strong><span>月</span></th>
+        <td>${ranking.map((item) => `<span>${item.fish}</span>`).join("")}</td>
+      </tr>
+    `;
+  });
+
+  const currentMonthItems = currentMonthRanking.length
+    ? currentMonthRanking
+        .map(
+          (item, index) => `
+            <li>
+              <span class="current-target-rank">${index + 1}</span>
+              ${
+                ENABLE_FISH_ILLUSTRATIONS
+                  ? `<img class="current-target-illustration" src="${currentTargetIllustrationUrl(item.fish)}" alt="${item.fish}">`
+                  : ""
+              }
+              <span class="current-target-fish">${item.fish}</span>
+              <span class="current-target-count">${formatCount(item.count)}件</span>
+            </li>
+          `
+        )
+        .join("")
+    : '<li class="current-target-empty">今月のデータはまだありません</li>';
+
+  app.innerHTML = `
+    <article class="detail-page">
+      <nav class="breadcrumb" aria-label="パンくず">
+        <a href="#/">全国の釣果分布</a>
+        <span aria-hidden="true">/</span>
+        <span>${spot.spot_name}</span>
+      </nav>
+
+      <header class="detail-hero">
+        <div>
+          <p class="eyebrow">${spot.prefecture} / POINT DATA</p>
+          <h1>${spot.spot_name}</h1>
+        </div>
+        <div class="total-card">
+          <span>集計対象件数</span>
+          <strong>${formatCount(total)}<small>件</small></strong>
+        </div>
+      </header>
+
+      <section class="data-section current-target-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-number">01</p>
+            <h2>今月狙える魚 Top5</h2>
+          </div>
+          <p>${currentMonth}月の投稿件数ベース</p>
+        </div>
+        <ol class="current-target-list">${currentMonthItems}</ol>
+      </section>
+
+      <section class="data-section heatmap-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-number">02</p>
+            <h2>季節ごとの釣果傾向 Top10</h2>
+          </div>
+          <div class="heat-legend"><span>件数</span><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span>多</span></div>
+        </div>
+        <div class="table-wrap heatmap-wrap">
+          <table class="heatmap-table">
+            <thead>
+              <tr>
+                <th>魚種</th>
+                ${Array.from({ length: 12 }, (_, index) => `<th class="heatmap-month">${index + 1}月</th>`).join("")}
+              </tr>
+            </thead>
+            <tbody>${heatmapRows}</tbody>
+          </table>
+        </div>
+        <p class="table-note">各月の件数を色と数値で示しています。色が濃いほど件数が多いことを表します。</p>
+      </section>
+
+      <section class="data-section monthly-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-number">03</p>
+            <h2>月別ランキング</h2>
+          </div>
+          <p>各月の件数上位3魚種</p>
+        </div>
+        <div class="monthly-grid">
+          <table>
+            <thead><tr><th>月</th><th>件数上位の魚種</th></tr></thead>
+            <tbody>${monthlyRows.slice(0, 6).join("")}</tbody>
+          </table>
+          <table>
+            <thead><tr><th>月</th><th>件数上位の魚種</th></tr></thead>
+            <tbody>${monthlyRows.slice(6).join("")}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <a class="back-link" href="#/"><span aria-hidden="true">←</span> 地図に戻る</a>
+    </article>
+  `;
+}
+
+function renderNotFound() {
+  setPageScrollLocked(false);
+  removeActiveMap();
+  setHeaderControlsVisible(false);
+  app.innerHTML = `
+    <section class="not-found">
+      <p class="eyebrow">404 / NOT FOUND</p>
+      <h1>ポイントが見つかりません</h1>
+      <a class="back-link" href="#/">地図に戻る</a>
+    </section>
+  `;
+}
+
+function route() {
+  const match = window.location.hash.match(/^#\/spot\/([^/]+)$/);
+  if (match) {
+    renderDetailScreen(match[1]);
+  } else {
+    setHeaderControlsVisible(true);
+    renderHeaderControls();
+    renderMapScreen();
+  }
+  window.scrollTo(0, 0);
+  app.focus({ preventScroll: true });
+}
+
+window.addEventListener("hashchange", route);
+
+async function loadStatistics() {
+  app.innerHTML = `
+    <section class="not-found">
+      <p class="eyebrow">LOADING DATA</p>
+      <h1>集計データを読み込んでいます</h1>
+    </section>
+  `;
+
+  try {
+    try {
+      const illustrationResponse = await fetch(STATIC_ILLUSTRATIONS_URL, {
+        cache: "no-store"
+      });
+      if (illustrationResponse.ok) {
+        FISH_ILLUSTRATION_PATHS = await illustrationResponse.json();
+      }
+    } catch (_error) {
+      FISH_ILLUSTRATION_PATHS = {};
+    }
+
+    let response = await fetch(STATIC_STATISTICS_URL, { cache: "no-store" });
+    if (!response.ok) {
+      response = await fetch(API_STATISTICS_URL, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`統計データがHTTP ${response.status}を返しました。`);
+      }
+    }
+    const payload = await response.json();
+    SPOTS = payload.spots || [];
+    CATCH_RECORDS = payload.catches || [];
+    SPOT_TOTAL_COUNTS = new Map();
+    CATCH_RECORDS.forEach((record) => {
+      SPOT_TOTAL_COUNTS.set(
+        record.spot_id,
+        (SPOT_TOTAL_COUNTS.get(record.spot_id) || 0) + record.count
+      );
+    });
+    fishNames = [...new Set(CATCH_RECORDS.map((record) => record.fish_name))].sort(
+      (a, b) => a.localeCompare(b, "ja")
+    );
+
+    renderHeaderControls();
+    route();
+  } catch (error) {
+    app.innerHTML = `
+      <section class="not-found">
+        <p class="eyebrow">DATA ERROR</p>
+        <h1>集計データを読み込めませんでした</h1>
+        <p>${error.message}</p>
+        <p><code>python3 server.py</code> でサイトを起動してください。</p>
+      </section>
+    `;
+  }
+}
+
+loadStatistics();
