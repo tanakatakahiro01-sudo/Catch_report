@@ -21,8 +21,7 @@ let selectedSpotId = null;
 const state = {
   fish: "all",
   month: "all",
-  minSpotCount: 100,
-  satelliteMap: false
+  minSpotCount: 100
 };
 
 const mapView = {
@@ -33,11 +32,7 @@ const mapView = {
 const MAP_MAX_ZOOM = 256;
 const TILE_SIZE = 256;
 const AERIAL_TILE_URL = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg";
-const MAP_STYLE_URLS = {
-  outdoors: "https://tiles.stadiamaps.com/styles/outdoors.json",
-  satellite: "https://tiles.stadiamaps.com/styles/alidade_satellite.json"
-};
-const SATELLITE_MIN_ZOOM = 9;
+const MAP_STYLE_URL = "https://tiles.stadiamaps.com/styles/outdoors.json";
 const MAIN_MAP_FRAME = { x: 165, y: 20, width: 570, height: 570 };
 const MAIN_MAP_BOUNDS = { minLng: 128, maxLng: 146.5, minLat: 30, maxLat: 46 };
 const AERIAL_MAP_FRAME = { x: 0, y: 0, width: 760, height: 620 };
@@ -454,39 +449,15 @@ function selectOptions(values, selected, allLabel) {
 }
 
 function currentMapStyleUrl() {
-  return state.satelliteMap ? MAP_STYLE_URLS.satellite : MAP_STYLE_URLS.outdoors;
-}
-
-function canEnableSatelliteMap() {
-  if (!activeMap) return false;
-  return activeMap.getZoom() >= SATELLITE_MIN_ZOOM;
-}
-
-function syncSatelliteAvailability() {
-  const available = canEnableSatelliteMap();
-  if (!available && state.satelliteMap) {
-    state.satelliteMap = false;
-    activeMap.setStyle(currentMapStyleUrl());
-  }
-  return available;
+  return MAP_STYLE_URL;
 }
 
 function mapAttributionMarkup() {
-  const base = `
+  return `
     <a href="https://stadiamaps.com/" target="_blank" rel="noreferrer">© Stadia Maps</a>
     <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">© OpenMapTiles</a>
     <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap</a>
   `;
-  if (!state.satelliteMap) return base;
-  return `
-    ${base}
-    <span>© CNES, Distribution Airbus DS, © Airbus DS, © PlanetObserver (Contains Copernicus Data)</span>
-  `;
-}
-
-function refreshMapAttribution() {
-  const attribution = document.querySelector(".map-attribution");
-  if (attribution) attribution.innerHTML = mapAttributionMarkup();
 }
 
 function renderMapLibreMap(spotResults, colorRanks) {
@@ -631,10 +602,6 @@ function renderMapLibreMap(spotResults, colorRanks) {
   });
 
   activeMap.on("style.load", addCatchLayers);
-  activeMap.on("zoomend", () => {
-    syncSatelliteAvailability();
-    renderHeaderControls();
-  });
   activeMap.on("moveend", () => {
     mapCameraState = {
       center: activeMap.getCenter().toArray(),
@@ -708,21 +675,8 @@ function renderMapScreen() {
 }
 
 function renderHeaderControls() {
-  const satelliteAvailable = canEnableSatelliteMap();
   headerControls.innerHTML = `
     <div class="filter-fields">
-      <button
-        class="map-toggle-button${state.satelliteMap ? " is-active" : ""}"
-        id="map-satellite-toggle"
-        type="button"
-        aria-pressed="${state.satelliteMap ? "true" : "false"}"
-        ${satelliteAvailable ? "" : "disabled"}
-        title="${
-          satelliteAvailable ? "航空写真に切り替え" : `ズーム${SATELLITE_MIN_ZOOM}以上で利用できます`
-        }"
-      >
-        航空 <span>${state.satelliteMap ? "ON" : "OFF"}</span>
-      </button>
       <label>
         <span>魚種</span>
         <select id="fish-filter">
@@ -741,21 +695,8 @@ function renderHeaderControls() {
       </label>
       <button class="reset-button" id="reset-filters" type="button">条件をクリア</button>
     </div>
-    ${
-      satelliteAvailable
-        ? ""
-        : `<p class="map-toggle-note">航空写真はズーム${SATELLITE_MIN_ZOOM}以上で利用できます</p>`
-    }
     <p class="filter-result-count" id="filter-result-count"></p>
   `;
-
-  document.querySelector("#map-satellite-toggle").addEventListener("click", (event) => {
-    if (event.currentTarget.disabled) return;
-    state.satelliteMap = !state.satelliteMap;
-    renderHeaderControls();
-    refreshMapAttribution();
-    if (activeMap) activeMap.setStyle(currentMapStyleUrl());
-  });
   document.querySelector("#fish-filter").addEventListener("change", (event) => {
     state.fish = event.target.value;
     renderMapScreen();
