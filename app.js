@@ -2,7 +2,7 @@ const app = document.querySelector("#app");
 const headerControls = document.querySelector("#header-controls");
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 const ENABLE_FISH_ILLUSTRATIONS = true;
-const APP_ASSET_VERSION = "20260621-static-v2";
+const APP_ASSET_VERSION = "20260622-static-v3";
 const STATIC_STATISTICS_URL = new URL(
   `./data/statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -37,6 +37,7 @@ const MAP_STYLE_URLS = {
   outdoors: "https://tiles.stadiamaps.com/styles/outdoors.json",
   satellite: "https://tiles.stadiamaps.com/styles/alidade_satellite.json"
 };
+const SATELLITE_MIN_ZOOM = 9;
 const MAIN_MAP_FRAME = { x: 165, y: 20, width: 570, height: 570 };
 const MAIN_MAP_BOUNDS = { minLng: 128, maxLng: 146.5, minLat: 30, maxLat: 46 };
 const AERIAL_MAP_FRAME = { x: 0, y: 0, width: 760, height: 620 };
@@ -456,6 +457,20 @@ function currentMapStyleUrl() {
   return state.satelliteMap ? MAP_STYLE_URLS.satellite : MAP_STYLE_URLS.outdoors;
 }
 
+function canEnableSatelliteMap() {
+  if (!activeMap) return false;
+  return activeMap.getZoom() >= SATELLITE_MIN_ZOOM;
+}
+
+function syncSatelliteAvailability() {
+  const available = canEnableSatelliteMap();
+  if (!available && state.satelliteMap) {
+    state.satelliteMap = false;
+    activeMap.setStyle(currentMapStyleUrl());
+  }
+  return available;
+}
+
 function mapAttributionMarkup() {
   const base = `
     <a href="https://stadiamaps.com/" target="_blank" rel="noreferrer">© Stadia Maps</a>
@@ -467,6 +482,11 @@ function mapAttributionMarkup() {
     ${base}
     <span>© CNES, Distribution Airbus DS, © Airbus DS, © PlanetObserver (Contains Copernicus Data)</span>
   `;
+}
+
+function refreshMapAttribution() {
+  const attribution = document.querySelector(".map-attribution");
+  if (attribution) attribution.innerHTML = mapAttributionMarkup();
 }
 
 function renderMapLibreMap(spotResults, colorRanks) {
@@ -611,6 +631,10 @@ function renderMapLibreMap(spotResults, colorRanks) {
   });
 
   activeMap.on("style.load", addCatchLayers);
+  activeMap.on("zoomend", () => {
+    syncSatelliteAvailability();
+    renderHeaderControls();
+  });
   activeMap.on("moveend", () => {
     mapCameraState = {
       center: activeMap.getCenter().toArray(),
@@ -684,6 +708,7 @@ function renderMapScreen() {
 }
 
 function renderHeaderControls() {
+  const satelliteAvailable = canEnableSatelliteMap();
   headerControls.innerHTML = `
     <div class="filter-fields">
       <button
@@ -691,6 +716,10 @@ function renderHeaderControls() {
         id="map-satellite-toggle"
         type="button"
         aria-pressed="${state.satelliteMap ? "true" : "false"}"
+        ${satelliteAvailable ? "" : "disabled"}
+        title="${
+          satelliteAvailable ? "航空写真に切り替え" : `ズーム${SATELLITE_MIN_ZOOM}以上で利用できます`
+        }"
       >
         航空 <span>${state.satelliteMap ? "ON" : "OFF"}</span>
       </button>
@@ -712,13 +741,20 @@ function renderHeaderControls() {
       </label>
       <button class="reset-button" id="reset-filters" type="button">条件をクリア</button>
     </div>
+    ${
+      satelliteAvailable
+        ? ""
+        : `<p class="map-toggle-note">航空写真はズーム${SATELLITE_MIN_ZOOM}以上で利用できます</p>`
+    }
     <p class="filter-result-count" id="filter-result-count"></p>
   `;
 
   document.querySelector("#map-satellite-toggle").addEventListener("click", (event) => {
+    if (event.currentTarget.disabled) return;
     state.satelliteMap = !state.satelliteMap;
     renderHeaderControls();
-    renderMapScreen();
+    refreshMapAttribution();
+    if (activeMap) activeMap.setStyle(currentMapStyleUrl());
   });
   document.querySelector("#fish-filter").addEventListener("change", (event) => {
     state.fish = event.target.value;

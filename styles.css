@@ -280,6 +280,17 @@ h2 {
   color: rgba(255, 254, 249, 0.76);
 }
 
+.map-toggle-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.map-toggle-note {
+  margin: 4px 2px 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .reset-button:hover {
   color: var(--white);
   background: var(--ink);

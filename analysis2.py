@@ -625,7 +625,10 @@ def parse_japanese_caught_at(text: str) -> tuple[str, str] | tuple[None, None]:
         return None, None
 
     year, month, day, hour, minute = map(int, match.groups())
-    caught_dt = datetime(year, month, day, hour, minute)
+    try:
+        caught_dt = datetime(year, month, day, hour, minute)
+    except ValueError:
+        return None, None
     return caught_dt.isoformat(timespec="minutes"), caught_dt.date().isoformat()
 
 

@@ -6,6 +6,7 @@ from analysis2 import (
     describe_request_error,
     initialize_database,
     is_recoverable_http_error,
+    parse_japanese_caught_at,
     sample_percent_units,
     sample_progress_label,
     should_sample_catch,
@@ -15,6 +16,12 @@ import requests
 
 
 class CatchSamplingTest(unittest.TestCase):
+    def test_parse_japanese_caught_at_returns_none_for_invalid_year(self):
+        self.assertEqual(
+            (None, None),
+            parse_japanese_caught_at("0000年 6月 15日 12:34"),
+        )
+
     def test_recoverable_http_error_accepts_client_and_server_errors(self):
         response = requests.Response()
         response.status_code = 500
