@@ -1107,16 +1107,19 @@ th {
 
 .current-target-list li {
   display: grid;
-  grid-template-columns: 28px 56px minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-template-columns: 32px 48px minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: center;
-  padding: 14px 12px;
+  padding: 14px 10px;
   border: 1px solid var(--line);
   border-radius: 3px;
   background: rgba(227, 240, 239, 0.45);
 }
 
 .current-target-rank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--accent);
   font-family: var(--serif);
   font-size: 20px;
@@ -1125,18 +1128,23 @@ th {
 
 .current-target-illustration {
   display: block;
-  width: 56px;
-  height: 42px;
+  width: 48px;
+  height: 36px;
   object-fit: contain;
   object-position: center;
   border-radius: 8px;
-  background: #fff;
+  background: transparent;
 }
 
 .current-target-fish {
   min-width: 0;
   font-family: var(--serif);
   font-size: 16px;
+  line-height: 1.25;
+  word-break: keep-all;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .current-target-count {
