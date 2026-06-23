@@ -852,7 +852,7 @@ function renderDetailScreen(spotId) {
     .map((item) => ({ fish: item.fish, count: countFor(records, item.fish, currentMonth) }))
     .filter((item) => item.count > 0)
     .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
+    .slice(0, 3);
 
   const heatmapRows = fishRanking
     .map((item) => {
@@ -926,7 +926,7 @@ function renderDetailScreen(spotId) {
         <div class="section-heading">
           <div>
             <p class="section-number">01</p>
-            <h2>今月狙える魚 Top5</h2>
+            <h2>今月狙える魚 Top3</h2>
           </div>
           <p>${currentMonth}月の投稿件数ベース</p>
         </div>

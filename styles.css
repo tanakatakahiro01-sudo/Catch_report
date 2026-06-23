@@ -1098,8 +1098,8 @@ th {
 
 .current-target-list {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1107,10 +1107,10 @@ th {
 
 .current-target-list li {
   display: grid;
-  grid-template-columns: 32px 48px minmax(0, 1fr) auto;
-  gap: 8px;
+  grid-template-columns: 34px 52px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
-  padding: 14px 10px;
+  padding: 15px 12px;
   border: 1px solid var(--line);
   border-radius: 3px;
   background: rgba(227, 240, 239, 0.45);
@@ -1128,8 +1128,8 @@ th {
 
 .current-target-illustration {
   display: block;
-  width: 48px;
-  height: 36px;
+  width: 52px;
+  height: 39px;
   object-fit: contain;
   object-position: center;
   border-radius: 8px;
