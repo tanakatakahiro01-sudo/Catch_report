@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fish_name_aliases import load_fish_name_aliases, normalize_fish_name
+
 STATISTICS_JSON = ROOT / "data" / "statistics.json"
 WATER_TYPES_JSON = ROOT / "data" / "spot_water_types.json"
 OUTPUT_JSON = ROOT / "data" / "prefecture_water_type_month_top3.json"
@@ -15,6 +20,7 @@ WATER_TYPE_ORDER = ("海", "川", "湖（池）")
 def build_payload() -> dict[str, object]:
     statistics = json.loads(STATISTICS_JSON.read_text(encoding="utf-8"))
     water_types = json.loads(WATER_TYPES_JSON.read_text(encoding="utf-8"))
+    aliases = load_fish_name_aliases()
 
     grouped: dict[tuple[str, str, int], Counter[str]] = defaultdict(Counter)
     monthly_totals: dict[tuple[str, str, int], int] = defaultdict(int)
@@ -36,8 +42,9 @@ def build_payload() -> dict[str, object]:
 
         prefecture = str(spot_meta["prefecture"])
         water_type = str(spot_meta["water_type"])
+        normalized_name = normalize_fish_name(str(fish_name), aliases)
         key = (prefecture, water_type, month)
-        grouped[key][str(fish_name)] += count
+        grouped[key][normalized_name] += count
         monthly_totals[key] += count
 
     prefectures = sorted({pref for pref, _, _ in grouped})

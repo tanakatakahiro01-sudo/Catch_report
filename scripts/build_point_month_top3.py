@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fish_name_aliases import load_fish_name_aliases, normalize_fish_name
+
 STATISTICS_JSON = ROOT / "data" / "statistics.json"
 OUTPUT_JSON = ROOT / "data" / "point_month_top3.json"
 
@@ -14,6 +19,7 @@ def build_payload() -> dict[str, object]:
     statistics = json.loads(STATISTICS_JSON.read_text(encoding="utf-8"))
     spots = statistics.get("spots", [])
     catches = statistics.get("catches", [])
+    aliases = load_fish_name_aliases()
 
     spot_lookup = {str(spot["id"]): spot for spot in spots}
     grouped: dict[tuple[str, int], Counter[str]] = defaultdict(Counter)
@@ -31,8 +37,9 @@ def build_payload() -> dict[str, object]:
         if not fish_name or count <= 0:
             continue
 
+        normalized_name = normalize_fish_name(str(fish_name), aliases)
         key = (spot_id, month)
-        grouped[key][str(fish_name)] += count
+        grouped[key][normalized_name] += count
         monthly_totals[key] += count
         spot_totals[spot_id] += count
 

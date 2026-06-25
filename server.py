@@ -11,6 +11,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from fish_name_aliases import load_fish_name_aliases, normalize_fish_name
+
 DEFAULT_DATABASE = Path("data/anglers_catches.db")
 DEFAULT_STATISTICS_JSON = Path("data/statistics.json")
 PUBLIC_PATHS = {
@@ -33,6 +35,7 @@ def query_statistics(database: Path) -> dict:
 
     connection = sqlite3.connect(database)
     connection.row_factory = sqlite3.Row
+    aliases = load_fish_name_aliases()
     try:
         spots = [
             {
@@ -54,33 +57,34 @@ def query_statistics(database: Path) -> dict:
             )
         ]
 
+        grouped_catches: dict[tuple[str, str, int], int] = {}
+        for row in connection.execute(
+            """
+            SELECT
+                c.spot_id,
+                c.fish_name,
+                CAST(strftime('%m', c.caught_date) AS INTEGER) AS month,
+                COUNT(*) AS count
+            FROM catches AS c
+            JOIN spots AS s ON s.id = c.spot_id
+            WHERE s.lat BETWEEN 20 AND 50
+              AND s.lng BETWEEN 120 AND 155
+            GROUP BY c.spot_id, c.fish_name, CAST(strftime('%Y', c.caught_date) AS INTEGER), month
+            ORDER BY c.spot_id, c.fish_name, month
+            """
+        ):
+            normalized_name = normalize_fish_name(str(row["fish_name"]), aliases)
+            key = (str(row["spot_id"]), normalized_name, int(row["month"]))
+            grouped_catches[key] = grouped_catches.get(key, 0) + int(row["count"])
+
         catches = [
             {
-                "spot_id": str(row["spot_id"]),
-                "fish_name": row["fish_name"],
-                "month": row["month"],
-                "count": row["count"],
+                "spot_id": spot_id,
+                "fish_name": fish_name,
+                "month": month,
+                "count": count,
             }
-            for row in connection.execute(
-                """
-                SELECT
-                    c.spot_id,
-                    s.prefecture,
-                    s.spot_name,
-                    s.lat,
-                    s.lng,
-                    c.fish_name,
-                    CAST(strftime('%Y', c.caught_date) AS INTEGER) AS year,
-                    CAST(strftime('%m', c.caught_date) AS INTEGER) AS month,
-                    COUNT(*) AS count
-                FROM catches AS c
-                JOIN spots AS s ON s.id = c.spot_id
-                WHERE s.lat BETWEEN 20 AND 50
-                  AND s.lng BETWEEN 120 AND 155
-                GROUP BY c.spot_id, c.fish_name, year, month
-                ORDER BY c.spot_id, c.fish_name, year, month
-                """
-            )
+            for (spot_id, fish_name, month), count in sorted(grouped_catches.items())
         ]
 
         period = connection.execute(
@@ -89,7 +93,11 @@ def query_statistics(database: Path) -> dict:
         return {
             "spots": spots,
             "catches": catches,
-            "metadata": {"oldest": period["oldest"], "newest": period["newest"]},
+            "metadata": {
+                "oldest": period["oldest"],
+                "newest": period["newest"],
+                "fish_aliases_applied": True,
+            },
         }
     finally:
         connection.close()
