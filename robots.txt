@@ -1,2 +1,3 @@
 User-agent: *
 Disallow:
+Sitemap: https://catch-report.pages.dev/sitemap.xml
