@@ -1201,6 +1201,8 @@ th {
   width: max-content;
   padding-bottom: 8px;
   animation: affiliate-marquee var(--affiliate-marquee-duration, 52s) linear infinite;
+  animation-play-state: running;
+  will-change: transform;
 }
 
 .affiliate-card {
@@ -1224,7 +1226,7 @@ th {
 .affiliate-grid-inline,
 .affiliate-grid-detail-fixed {
   grid-auto-flow: column;
-  grid-auto-columns: 320px;
+  grid-auto-columns: min(320px, calc(100vw - 72px));
   width: max-content;
   padding-bottom: 0;
 }
@@ -1357,12 +1359,6 @@ th {
   }
   to {
     transform: translateX(calc(-50% - 7px));
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .affiliate-grid {
-    animation: none;
   }
 }
 
@@ -1520,7 +1516,7 @@ th {
 
   .affiliate-grid-inline,
   .affiliate-grid-detail-fixed {
-    grid-auto-columns: 280px;
+    grid-auto-columns: min(280px, calc(100vw - 68px));
   }
 
   .map-affiliate-panel {
@@ -1642,7 +1638,7 @@ th {
 
   .affiliate-grid-inline,
   .affiliate-grid-detail-fixed {
-    grid-auto-columns: 230px;
+    grid-auto-columns: min(220px, calc(100vw - 48px));
     gap: 10px;
   }
 
