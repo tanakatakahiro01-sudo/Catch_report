@@ -20,6 +20,7 @@
 
 html {
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -1354,7 +1355,7 @@ th {
   .filter-fields input {
     height: 30px;
     padding: 0 18px 0 6px;
-    font-size: 11px;
+    font-size: 16px;
   }
 
   .reset-button {
