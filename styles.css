@@ -39,7 +39,8 @@ body.map-scroll-locked {
 }
 
 button,
-select {
+select,
+input {
   color: inherit;
   font: inherit;
 }
@@ -204,7 +205,7 @@ h2 {
 
 .filter-fields {
   display: grid;
-  grid-template-columns: auto minmax(150px, 1fr) minmax(120px, 0.75fr) auto;
+  grid-template-columns: minmax(0, 1.7fr) minmax(108px, 0.8fr) auto;
   gap: 8px;
   align-items: end;
 }
@@ -224,7 +225,8 @@ h2 {
   letter-spacing: 0.08em;
 }
 
-.filter-fields select {
+.filter-fields select,
+.filter-fields input {
   width: 100%;
   height: 36px;
   padding: 0 34px 0 10px;
@@ -234,7 +236,13 @@ h2 {
   background: rgba(255, 254, 249, 0.75);
 }
 
-.filter-fields select:focus {
+.filter-fields input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.filter-fields select:focus,
+.filter-fields input:focus {
   border-color: var(--teal);
   box-shadow: 0 0 0 3px rgba(11, 105, 103, 0.12);
 }
@@ -1289,7 +1297,7 @@ th {
   }
 
   .filter-fields {
-    grid-template-columns: auto minmax(0, 1.2fr) minmax(0, 0.9fr) auto;
+    grid-template-columns: minmax(0, 1.55fr) minmax(94px, 0.85fr) auto;
     gap: 6px;
   }
 
@@ -1333,7 +1341,7 @@ th {
   }
 
   .filter-fields {
-    grid-template-columns: auto minmax(0, 1.2fr) minmax(0, 0.85fr) auto;
+    grid-template-columns: minmax(0, 1.45fr) minmax(72px, 0.72fr) auto;
     align-items: end;
   }
 
@@ -1342,7 +1350,8 @@ th {
     font-size: 9px;
   }
 
-  .filter-fields select {
+  .filter-fields select,
+  .filter-fields input {
     height: 30px;
     padding: 0 18px 0 6px;
     font-size: 11px;
@@ -1351,9 +1360,9 @@ th {
   .reset-button {
     grid-column: auto;
     height: 30px;
-    padding: 0 7px;
+    padding: 0 8px;
     white-space: nowrap;
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .map-toggle-button {

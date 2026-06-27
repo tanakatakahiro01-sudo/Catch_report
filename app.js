@@ -19,7 +19,7 @@ let FISH_ILLUSTRATION_PATHS = {};
 let selectedSpotId = null;
 
 const state = {
-  fish: "all",
+  fishQuery: "",
   month: "all",
   minSpotCount: 100
 };
@@ -121,7 +121,8 @@ function sumCounts(records) {
 
 function filteredRecords() {
   return CATCH_RECORDS.filter((record) => {
-    const matchesFish = state.fish === "all" || record.fish_name === state.fish;
+    const matchesFish =
+      state.fishQuery === "" || record.fish_name.includes(state.fishQuery);
     const matchesMonth = state.month === "all" || record.month === Number(state.month);
     return matchesFish && matchesMonth;
   });
@@ -679,9 +680,18 @@ function renderHeaderControls() {
     <div class="filter-fields">
       <label>
         <span>魚種</span>
-        <select id="fish-filter">
-          ${selectOptions(fishNames, state.fish, "すべての魚種")}
-        </select>
+        <input
+          id="fish-filter"
+          type="search"
+          list="fish-filter-options"
+          value="${escapeHtml(state.fishQuery)}"
+          placeholder="魚種を検索"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <datalist id="fish-filter-options">
+          ${fishNames.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("")}
+        </datalist>
       </label>
       <label>
         <span>月</span>
@@ -697,8 +707,8 @@ function renderHeaderControls() {
     </div>
     <p class="filter-result-count" id="filter-result-count"></p>
   `;
-  document.querySelector("#fish-filter").addEventListener("change", (event) => {
-    state.fish = event.target.value;
+  document.querySelector("#fish-filter").addEventListener("input", (event) => {
+    state.fishQuery = event.target.value.trim();
     renderMapScreen();
   });
   document.querySelector("#month-filter").addEventListener("change", (event) => {
@@ -706,7 +716,7 @@ function renderHeaderControls() {
     renderMapScreen();
   });
   document.querySelector("#reset-filters").addEventListener("click", () => {
-    state.fish = "all";
+    state.fishQuery = "";
     state.month = "all";
     renderHeaderControls();
     renderMapScreen();
