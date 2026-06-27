@@ -671,17 +671,11 @@ function renderMapScreen() {
               ? `<div class="empty-state"><strong>該当するデータがありません</strong><span>条件を変更して確認してください。</span></div>`
               : ""
           }
+          <section class="map-affiliate-panel" aria-label="全国のおすすめタックル">
+            ${renderAffiliateCards(nationwideAffiliateCards, { variant: "inline" })}
+          </section>
           <div id="spot-bottom-sheet" class="spot-bottom-sheet" hidden></div>
         </div>
-      </section>
-      <section class="map-affiliate-panel" aria-label="全国のおすすめタックル">
-        <div class="section-heading is-overlay">
-          <div>
-            <p class="section-number">AD</p>
-            <h2>${affiliateMonth}月に全国で注目の魚 Top10</h2>
-          </div>
-        </div>
-        ${renderAffiliateCards(nationwideAffiliateCards, { compact: false })}
       </section>
     </section>
   `;
@@ -766,57 +760,61 @@ function affiliateLinksForFish(fish) {
   return entry.affiliate_links;
 }
 
-function pickAffiliateCard(fish, count = null) {
+function shuffleCards(items) {
+  const result = [...items];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+  }
+  return result;
+}
+
+function pickAffiliateCards(fish, limit = 2) {
   const links = affiliateLinksForFish(fish);
-  if (links.length === 0) return null;
-  const item = links[0];
-  return {
-    fish,
-    count,
-    keyword: item.rakuten_keyword || fish,
-    name: item.item_name || fish,
-    price: Number.isFinite(item.item_price) ? item.item_price : null,
-    shop: item.shop_name || "",
-    imageUrl: item.image_url || "",
-    url: item.affiliate_url
-  };
+  if (links.length === 0) return [];
+  return shuffleCards(links)
+    .slice(0, limit)
+    .map((item) => {
+      const fallbackMediumImageUrl = Array.isArray(item.medium_image_urls)
+        ? item.medium_image_urls.find((value) => typeof value === "string" && value.length > 0) || ""
+        : "";
+      return {
+        fish,
+        name: item.item_name || fish,
+        imageUrl: item.image_url || fallbackMediumImageUrl,
+        url: item.affiliate_url
+      };
+    });
 }
 
 function renderAffiliateCards(cards, options = {}) {
-  const { compact = false } = options;
+  const { variant = "map" } = options;
   if (!cards.length) {
     return '<p class="affiliate-empty">該当するリンクはまだありません。</p>';
   }
+  const marqueeDurationSeconds = Math.max(27, cards.length * 6.6);
+  const cardMarkup = cards
+    .map(
+      (card) => `
+        <article class="affiliate-card affiliate-card-${variant}">
+          <a class="affiliate-card-image-link" href="${escapeHtml(card.url)}" target="_blank" rel="nofollow sponsored noopener noreferrer" aria-label="${escapeHtml(card.name)}">
+            ${
+              card.imageUrl
+                ? `<div class="affiliate-card-image-wrap"><img class="affiliate-card-image" src="${escapeHtml(card.imageUrl)}" alt="${escapeHtml(card.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`
+                : `<div class="affiliate-card-image-wrap affiliate-card-image-fallback"><span>${escapeHtml(card.fish)}</span></div>`
+            }
+          </a>
+          <a class="affiliate-card-title" href="${escapeHtml(card.url)}" target="_blank" rel="nofollow sponsored noopener noreferrer">${escapeHtml(card.name)}</a>
+        </article>
+      `
+    )
+    .join("");
   return `
-    <div class="affiliate-grid${compact ? " is-compact" : ""}">
-      ${cards
-        .map(
-          (card) => `
-            <article class="affiliate-card">
-              ${
-                card.imageUrl
-                  ? `<div class="affiliate-card-image-wrap"><img class="affiliate-card-image" src="${escapeHtml(card.imageUrl)}" alt="${escapeHtml(card.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`
-                  : ""
-              }
-              <div class="affiliate-card-meta">
-                <span class="affiliate-fish">${escapeHtml(card.fish)}</span>
-                ${card.count !== null ? `<strong>${formatCount(card.count)}件</strong>` : ""}
-              </div>
-              <h3>${escapeHtml(card.keyword)}</h3>
-              <p>${escapeHtml(card.name)}</p>
-              <div class="affiliate-card-footer">
-                <span>${card.shop ? escapeHtml(card.shop) : "楽天市場"}</span>
-                ${
-                  card.price !== null
-                    ? `<span class="affiliate-price">${formatCount(card.price)}円</span>`
-                    : ""
-                }
-              </div>
-              <a href="${escapeHtml(card.url)}" target="_blank" rel="nofollow sponsored noopener noreferrer">商品を見る</a>
-            </article>
-          `
-        )
-        .join("")}
+    <div class="affiliate-marquee affiliate-marquee-${variant}">
+      <div class="affiliate-grid affiliate-grid-${variant}" style="--affiliate-marquee-duration:${marqueeDurationSeconds}s">
+        ${cardMarkup}
+        ${cards.length > 1 ? cardMarkup : ""}
+      </div>
     </div>
   `;
 }
@@ -829,9 +827,9 @@ function nationwideMonthAffiliateCards(limit = 10) {
   const month = currentActiveMonth();
   const ranking = aggregateFish(CATCH_RECORDS.filter((record) => record.month === month));
   return ranking
-    .map((item) => pickAffiliateCard(item.fish, item.count))
-    .filter(Boolean)
-    .slice(0, limit);
+    .slice(0, limit)
+    .flatMap((item) => pickAffiliateCards(item.fish, 2))
+    .slice(0, limit * 2);
 }
 
 function heatmapIntensity(count, maxCount) {
@@ -1003,8 +1001,8 @@ function renderDetailScreen(spotId) {
         .join("")
     : '<li class="current-target-empty">今月のデータはまだありません</li>';
   const currentMonthAffiliateCards = currentMonthRanking
-    .map((item) => pickAffiliateCard(item.fish, item.count))
-    .filter(Boolean);
+    .flatMap((item) => pickAffiliateCards(item.fish, 2))
+    .slice(0, 6);
 
   app.innerHTML = `
     <article class="detail-page">
@@ -1041,7 +1039,7 @@ function renderDetailScreen(spotId) {
               <h2>${currentMonth}月向けのおすすめタックル</h2>
             </div>
           </div>
-          ${renderAffiliateCards(currentMonthAffiliateCards)}
+          ${renderAffiliateCards(currentMonthAffiliateCards, { variant: "detail-fixed" })}
         </div>
       </section>
 
