@@ -2,7 +2,7 @@ const app = document.querySelector("#app");
 const headerControls = document.querySelector("#header-controls");
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 const ENABLE_FISH_ILLUSTRATIONS = true;
-const APP_ASSET_VERSION = "20260622-static-v3";
+const APP_ASSET_VERSION = "20260627-affiliate-v1";
 const STATIC_STATISTICS_URL = new URL(
   `./data/statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -11,11 +11,16 @@ const STATIC_ILLUSTRATIONS_URL = new URL(
   `./data/fish_illustrations.json?v=${APP_ASSET_VERSION}`,
   window.location.href
 ).toString();
+const STATIC_AFFILIATE_URL = new URL(
+  `./data/affiliate_url.json?v=${APP_ASSET_VERSION}`,
+  window.location.href
+).toString();
 const API_STATISTICS_URL = new URL("./api/statistics", window.location.href).toString();
 let SPOTS = [];
 let CATCH_RECORDS = [];
 let SPOT_TOTAL_COUNTS = new Map();
 let FISH_ILLUSTRATION_PATHS = {};
+let FISH_AFFILIATE_URLS = {};
 let selectedSpotId = null;
 
 const state = {
@@ -633,6 +638,8 @@ function renderMapScreen() {
   const records = filteredRecords();
   const spotResults = aggregateSpots(records);
   const spotCounts = spotResults.map((spot) => spot.count);
+  const affiliateMonth = currentActiveMonth();
+  const nationwideAffiliateCards = nationwideMonthAffiliateCards(10);
   const colorRanks = new Map(
     [...new Set(spotCounts)].sort((a, b) => a - b).map((count, index) => [count, index])
   );
@@ -664,6 +671,15 @@ function renderMapScreen() {
               ? `<div class="empty-state"><strong>該当するデータがありません</strong><span>条件を変更して確認してください。</span></div>`
               : ""
           }
+          <section class="map-affiliate-panel" aria-label="全国のおすすめタックル">
+            <div class="section-heading is-overlay">
+              <div>
+                <p class="section-number">AD</p>
+                <h2>${affiliateMonth}月に全国で注目の魚 Top10</h2>
+              </div>
+            </div>
+            ${renderAffiliateCards(nationwideAffiliateCards, { compact: true })}
+          </section>
           <div id="spot-bottom-sheet" class="spot-bottom-sheet" hidden></div>
         </div>
       </section>
@@ -742,6 +758,74 @@ function countFor(records, fish, month) {
   return sumCounts(
     records.filter((record) => record.fish_name === fish && record.month === month)
   );
+}
+
+function affiliateLinksForFish(fish) {
+  const entry = FISH_AFFILIATE_URLS[fish];
+  if (!entry || entry.status !== "ok" || !Array.isArray(entry.affiliate_links)) return [];
+  return entry.affiliate_links;
+}
+
+function pickAffiliateCard(fish, count = null) {
+  const links = affiliateLinksForFish(fish);
+  if (links.length === 0) return null;
+  const item = links[0];
+  return {
+    fish,
+    count,
+    keyword: item.rakuten_keyword || fish,
+    name: item.item_name || fish,
+    price: Number.isFinite(item.item_price) ? item.item_price : null,
+    shop: item.shop_name || "",
+    url: item.affiliate_url
+  };
+}
+
+function renderAffiliateCards(cards, options = {}) {
+  const { compact = false } = options;
+  if (!cards.length) {
+    return '<p class="affiliate-empty">該当するリンクはまだありません。</p>';
+  }
+  return `
+    <div class="affiliate-grid${compact ? " is-compact" : ""}">
+      ${cards
+        .map(
+          (card) => `
+            <article class="affiliate-card">
+              <div class="affiliate-card-meta">
+                <span class="affiliate-fish">${escapeHtml(card.fish)}</span>
+                ${card.count !== null ? `<strong>${formatCount(card.count)}件</strong>` : ""}
+              </div>
+              <h3>${escapeHtml(card.keyword)}</h3>
+              <p>${escapeHtml(card.name)}</p>
+              <div class="affiliate-card-footer">
+                <span>${card.shop ? escapeHtml(card.shop) : "楽天市場"}</span>
+                ${
+                  card.price !== null
+                    ? `<span class="affiliate-price">${formatCount(card.price)}円</span>`
+                    : ""
+                }
+              </div>
+              <a href="${escapeHtml(card.url)}" target="_blank" rel="nofollow sponsored noopener noreferrer">商品を見る</a>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function currentActiveMonth() {
+  return state.month === "all" ? new Date().getMonth() + 1 : Number(state.month);
+}
+
+function nationwideMonthAffiliateCards(limit = 10) {
+  const month = currentActiveMonth();
+  const ranking = aggregateFish(CATCH_RECORDS.filter((record) => record.month === month));
+  return ranking
+    .map((item) => pickAffiliateCard(item.fish, item.count))
+    .filter(Boolean)
+    .slice(0, limit);
 }
 
 function heatmapIntensity(count, maxCount) {
@@ -912,6 +996,9 @@ function renderDetailScreen(spotId) {
         )
         .join("")
     : '<li class="current-target-empty">今月のデータはまだありません</li>';
+  const currentMonthAffiliateCards = currentMonthRanking
+    .map((item) => pickAffiliateCard(item.fish, item.count))
+    .filter(Boolean);
 
   app.innerHTML = `
     <article class="detail-page">
@@ -941,6 +1028,15 @@ function renderDetailScreen(spotId) {
           <p>${currentMonth}月の投稿件数ベース</p>
         </div>
         <ol class="current-target-list">${currentMonthItems}</ol>
+        <div class="affiliate-section">
+          <div class="section-heading is-subsection">
+            <div>
+              <p class="section-number">AD</p>
+              <h2>${currentMonth}月向けのおすすめタックル</h2>
+            </div>
+          </div>
+          ${renderAffiliateCards(currentMonthAffiliateCards)}
+        </div>
       </section>
 
       <section class="data-section heatmap-section">
@@ -1036,6 +1132,18 @@ async function loadStatistics() {
       }
     } catch (_error) {
       FISH_ILLUSTRATION_PATHS = {};
+    }
+
+    try {
+      const affiliateResponse = await fetch(STATIC_AFFILIATE_URL, {
+        cache: "no-store"
+      });
+      if (affiliateResponse.ok) {
+        const affiliatePayload = await affiliateResponse.json();
+        FISH_AFFILIATE_URLS = affiliatePayload.fish_affiliate_urls || {};
+      }
+    } catch (_error) {
+      FISH_AFFILIATE_URLS = {};
     }
 
     let response = await fetch(STATIC_STATISTICS_URL, { cache: "no-store" });
