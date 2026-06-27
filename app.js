@@ -2,7 +2,7 @@ const app = document.querySelector("#app");
 const headerControls = document.querySelector("#header-controls");
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 const ENABLE_FISH_ILLUSTRATIONS = true;
-const APP_ASSET_VERSION = "20260627-affiliate-v1";
+const APP_ASSET_VERSION = "20260628-affiliate-image-v1";
 const STATIC_STATISTICS_URL = new URL(
   `./data/statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -671,17 +671,17 @@ function renderMapScreen() {
               ? `<div class="empty-state"><strong>該当するデータがありません</strong><span>条件を変更して確認してください。</span></div>`
               : ""
           }
-          <section class="map-affiliate-panel" aria-label="全国のおすすめタックル">
-            <div class="section-heading is-overlay">
-              <div>
-                <p class="section-number">AD</p>
-                <h2>${affiliateMonth}月に全国で注目の魚 Top10</h2>
-              </div>
-            </div>
-            ${renderAffiliateCards(nationwideAffiliateCards, { compact: true })}
-          </section>
           <div id="spot-bottom-sheet" class="spot-bottom-sheet" hidden></div>
         </div>
+      </section>
+      <section class="map-affiliate-panel" aria-label="全国のおすすめタックル">
+        <div class="section-heading is-overlay">
+          <div>
+            <p class="section-number">AD</p>
+            <h2>${affiliateMonth}月に全国で注目の魚 Top10</h2>
+          </div>
+        </div>
+        ${renderAffiliateCards(nationwideAffiliateCards, { compact: false })}
       </section>
     </section>
   `;
@@ -777,6 +777,7 @@ function pickAffiliateCard(fish, count = null) {
     name: item.item_name || fish,
     price: Number.isFinite(item.item_price) ? item.item_price : null,
     shop: item.shop_name || "",
+    imageUrl: item.image_url || "",
     url: item.affiliate_url
   };
 }
@@ -792,6 +793,11 @@ function renderAffiliateCards(cards, options = {}) {
         .map(
           (card) => `
             <article class="affiliate-card">
+              ${
+                card.imageUrl
+                  ? `<div class="affiliate-card-image-wrap"><img class="affiliate-card-image" src="${escapeHtml(card.imageUrl)}" alt="${escapeHtml(card.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`
+                  : ""
+              }
               <div class="affiliate-card-meta">
                 <span class="affiliate-fish">${escapeHtml(card.fish)}</span>
                 ${card.count !== null ? `<strong>${formatCount(card.count)}件</strong>` : ""}
