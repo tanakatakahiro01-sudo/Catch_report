@@ -1194,9 +1194,7 @@ th {
 }
 
 .affiliate-grid {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(180px, 220px);
+  display: flex;
   gap: 14px;
   width: max-content;
   padding-bottom: 8px;
@@ -1205,9 +1203,16 @@ th {
   will-change: transform;
 }
 
+@media (min-width: 561px) {
+  .affiliate-grid {
+    animation-duration: calc(var(--affiliate-marquee-duration, 52s) * 1.5);
+  }
+}
+
 .affiliate-card {
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   gap: 8px;
   padding: 0;
   border: 0;
@@ -1215,26 +1220,19 @@ th {
 }
 
 .affiliate-grid-detail {
-  grid-auto-flow: row;
-  grid-auto-columns: initial;
+  display: grid;
   grid-template-columns: 1fr;
   width: 100%;
   padding-bottom: 0;
   animation: none;
 }
 
-.affiliate-grid-inline,
-.affiliate-grid-detail-fixed {
-  grid-auto-flow: column;
-  grid-auto-columns: min(320px, calc(100vw - 72px));
-  width: max-content;
-  padding-bottom: 0;
-}
-
-.affiliate-marquee:hover .affiliate-grid,
-.affiliate-marquee:focus-within .affiliate-grid {
-  animation-play-state: paused;
-}
+  .affiliate-grid-inline,
+  .affiliate-grid-detail-fixed {
+    display: flex;
+    width: max-content;
+    padding-bottom: 0;
+  }
 
 .affiliate-card-detail {
   display: grid;
@@ -1247,10 +1245,11 @@ th {
 .affiliate-card-detail-fixed {
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr);
-  gap: 12px;
+  width: min(320px, calc(100vw - 72px));
+  gap: 8px;
   align-items: center;
   min-height: 92px;
-  padding: 10px 12px;
+  padding: 6px 8px;
   border: 1px solid rgba(23, 59, 60, 0.12);
   border-radius: 10px;
   background: rgba(255, 254, 249, 0.96);
@@ -1329,12 +1328,12 @@ th {
   bottom: 16px;
   left: 16px;
   z-index: 4;
-  padding: 14px 16px;
-  border: 1px solid rgba(23, 59, 60, 0.14);
-  border-radius: 12px;
-  background: rgba(255, 254, 249, 0.94);
-  box-shadow: 0 18px 40px rgba(18, 58, 57, 0.18);
-  backdrop-filter: blur(12px);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .affiliate-section {
@@ -1511,19 +1510,14 @@ th {
   }
 
   .affiliate-grid {
-    grid-auto-columns: minmax(170px, 200px);
-  }
-
-  .affiliate-grid-inline,
-  .affiliate-grid-detail-fixed {
-    grid-auto-columns: min(280px, calc(100vw - 68px));
+    gap: 12px;
   }
 
   .map-affiliate-panel {
     right: 14px;
     bottom: 14px;
     left: 14px;
-    padding: 12px 14px;
+    padding: 0;
   }
 }
 
@@ -1531,6 +1525,12 @@ th {
   .detail-page,
   .not-found {
     width: min(100% - 24px, 1180px);
+  }
+
+  .header-controls {
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .detail-page {
@@ -1595,13 +1595,13 @@ th {
   }
 
   .filter-result-count {
-    margin-top: 3px;
-    font-size: 10px;
+    display: none;
   }
 
   .color-legend {
     min-width: 0;
-    padding: 8px 10px;
+    gap: 4px;
+    padding: 6px 8px;
   }
 
   .map-layer-switch {
@@ -1616,15 +1616,20 @@ th {
   }
 
   .map-legend-overlay {
-    bottom: 68px;
-    left: 12px;
+    top: 10px;
+    bottom: auto;
+    left: 10px;
+  }
+
+  .legend-title {
+    font-size: 8px;
   }
 
   .map-affiliate-panel {
-    right: 10px;
-    bottom: 10px;
-    left: 10px;
-    padding: 10px 12px;
+    right: 12px;
+    bottom: 92px;
+    left: 12px;
+    padding: 0;
   }
 
   .affiliate-card {
@@ -1632,14 +1637,11 @@ th {
   }
 
   .affiliate-grid {
-    grid-auto-columns: minmax(150px, 176px);
-    gap: 10px;
+    gap: 5px;
   }
 
-  .affiliate-grid-inline,
-  .affiliate-grid-detail-fixed {
-    grid-auto-columns: min(220px, calc(100vw - 48px));
-    gap: 10px;
+  .affiliate-grid {
+    animation-duration: calc(var(--affiliate-marquee-duration, 52s) * 1.5);
   }
 
   .affiliate-card-detail {
@@ -1650,9 +1652,10 @@ th {
   .affiliate-card-inline,
   .affiliate-card-detail-fixed {
     grid-template-columns: 72px minmax(0, 1fr);
-    gap: 10px;
+    width: calc((100vw - 56px) * 0.4875);
+    gap: 3px;
     min-height: 72px;
-    padding: 8px 10px;
+    padding: 4px 6px;
   }
 
   .affiliate-card-detail .affiliate-card-image-link {
@@ -1661,11 +1664,13 @@ th {
 
   .affiliate-card-inline .affiliate-card-image-link,
   .affiliate-card-detail-fixed .affiliate-card-image-link {
-    width: 72px;
+    width: 54px;
   }
 
   .affiliate-card-title {
-    font-size: 12px;
+    font-size: 11px;
+    line-height: 1.35;
+    margin-left: -20px;
   }
 
   .affiliate-section {
@@ -1674,12 +1679,14 @@ th {
   }
 
   .legend-scale {
-    gap: 4px;
+    gap: 3px;
+    font-size: 8px;
   }
 
   .legend-swatch {
-    width: 9px;
-    height: 9px;
+    width: 7px;
+    height: 7px;
+    border-width: 1px;
   }
 
   .japan-map {
