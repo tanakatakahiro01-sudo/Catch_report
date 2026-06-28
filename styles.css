@@ -1176,6 +1176,198 @@ th {
   text-align: center;
 }
 
+.detail-loading {
+  min-height: 240px;
+  padding-top: 56px;
+}
+
+.time-histogram-list {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.time-histogram-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 248px;
+  gap: 18px;
+  align-items: stretch;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 254, 249, 0.94);
+}
+
+.time-histogram-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.time-histogram-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.time-histogram-title {
+  display: grid;
+  grid-template-columns: 28px 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.time-histogram-rank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-family: var(--serif);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.time-histogram-illustration {
+  display: block;
+  width: 72px;
+  height: 54px;
+  object-fit: contain;
+}
+
+.time-histogram-title strong {
+  display: block;
+  font-family: var(--serif);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.time-histogram-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.histogram-panel {
+  fill: rgba(255, 254, 249, 0.76);
+  stroke: rgba(23, 59, 60, 0.08);
+  stroke-width: 1;
+}
+
+.histogram-grid-line {
+  stroke: rgba(23, 59, 60, 0.1);
+  stroke-width: 1;
+  stroke-dasharray: 3 6;
+}
+
+.histogram-grid-line-vertical {
+  stroke: rgba(22, 135, 131, 0.32);
+}
+
+.histogram-grid-line-major {
+  stroke: rgba(22, 135, 131, 0.46);
+}
+
+.histogram-axis-line {
+  stroke: rgba(23, 59, 60, 0.2);
+  stroke-width: 1.2;
+}
+
+.histogram-line-shadow {
+  fill: none;
+  stroke: rgba(22, 135, 131, 0.26);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.histogram-line {
+  fill: none;
+  stroke: #168783;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.histogram-area {
+  fill: rgba(22, 135, 131, 0.12);
+}
+
+.histogram-axis-label {
+  fill: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.histogram-y-axis-label {
+  fill: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.time-histogram-side {
+  display: flex;
+  align-items: flex-end;
+  transform: none;
+}
+
+.histogram-affiliate-card {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 200px minmax(0, 1fr);
+  gap: 6px;
+  align-items: stretch;
+  width: 100%;
+  height: 280px;
+  padding: 6px;
+  border: 1px solid rgba(23, 59, 60, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 254, 249, 0.98);
+  color: inherit;
+  text-decoration: none;
+}
+
+.histogram-affiliate-card-empty {
+  pointer-events: none;
+}
+
+.histogram-affiliate-image-wrap {
+  overflow: hidden;
+  border: 1px solid rgba(23, 59, 60, 0.08);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.histogram-affiliate-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.histogram-affiliate-name {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: left;
+}
+
 .affiliate-section {
   margin-top: 22px;
 }
@@ -1509,6 +1701,14 @@ th {
     grid-template-columns: 1fr;
   }
 
+  .time-histogram-card {
+    grid-template-columns: 1fr;
+  }
+
+  .time-histogram-side {
+    align-items: flex-end;
+  }
+
   .affiliate-grid {
     gap: 12px;
   }
@@ -1701,6 +1901,49 @@ th {
 
   .data-section {
     padding: 22px 16px;
+  }
+
+  .time-histogram-card {
+    gap: 14px;
+    padding: 14px;
+  }
+
+  .time-histogram-header {
+    display: block;
+  }
+
+  .time-histogram-axis-note {
+    margin-top: 8px;
+    white-space: normal;
+  }
+
+  .time-histogram-title {
+    grid-template-columns: 24px 60px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .time-histogram-rank {
+    font-size: 18px;
+  }
+
+  .time-histogram-illustration {
+    width: 60px;
+    height: 45px;
+  }
+
+  .time-histogram-title strong {
+    font-size: 17px;
+  }
+
+  .histogram-affiliate-card {
+    grid-template-columns: 1fr;
+    grid-template-rows: 200px minmax(0, 1fr);
+    height: 280px;
+    padding: 6px;
+  }
+
+  .histogram-affiliate-name {
+    font-size: 11px;
   }
 
   .section-heading {

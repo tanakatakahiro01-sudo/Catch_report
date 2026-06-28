@@ -15,6 +15,7 @@ from fish_name_aliases import load_fish_name_aliases, normalize_fish_name
 
 DEFAULT_DATABASE = Path("data/anglers_catches.db")
 DEFAULT_STATISTICS_JSON = Path("data/statistics.json")
+DEFAULT_DETAIL_STATISTICS_JSON = Path("data/detail_statistics.json")
 PUBLIC_PATHS = {
     "/",
     "/index.html",
@@ -24,6 +25,7 @@ PUBLIC_PATHS = {
     "/app.js",
     "/data/fish_illustrations.json",
     "/data/statistics.json",
+    "/data/detail_statistics.json",
 }
 PUBLIC_PREFIXES = ("/data/fish_slices/",)
 DEFAULT_MIN_SPOT_COUNT = 100
@@ -103,18 +105,134 @@ def query_statistics(database: Path) -> dict:
         connection.close()
 
 
-def export_statistics(database: Path, output: Path) -> None:
-    payload = query_statistics(database)
+def query_detail_statistics(database: Path) -> dict:
+    if not database.exists():
+        return {"spot_month_top3": {}, "metadata": {"oldest": None, "newest": None}}
+
+    connection = sqlite3.connect(database)
+    connection.row_factory = sqlite3.Row
+    aliases = load_fish_name_aliases()
+    try:
+        period = connection.execute(
+            "SELECT MIN(caught_date) AS oldest, MAX(caught_date) AS newest FROM catches"
+        ).fetchone()
+        oldest = period["oldest"]
+        newest = period["newest"]
+        if newest is None or oldest is None:
+            return {"spot_month_top3": {}, "metadata": {"oldest": None, "newest": None}}
+
+        monthly_counts: dict[tuple[str, int, str], int] = {}
+        for row in connection.execute(
+            """
+            SELECT
+                c.spot_id,
+                c.fish_name,
+                CAST(strftime('%m', c.caught_date) AS INTEGER) AS month,
+                COUNT(*) AS count
+            FROM catches AS c
+            JOIN spots AS s ON s.id = c.spot_id
+            WHERE s.lat BETWEEN 20 AND 50
+              AND s.lng BETWEEN 120 AND 155
+            GROUP BY c.spot_id, c.fish_name, CAST(strftime('%Y', c.caught_date) AS INTEGER), month
+            ORDER BY c.spot_id, c.fish_name, month
+            """
+        ):
+            normalized_name = normalize_fish_name(str(row["fish_name"]), aliases)
+            key = (str(row["spot_id"]), int(row["month"]), normalized_name)
+            monthly_counts[key] = monthly_counts.get(key, 0) + int(row["count"])
+
+        twenty_minute_counts: dict[tuple[str, str], list[int]] = {}
+        for row in connection.execute(
+            """
+            SELECT
+                c.spot_id,
+                c.fish_name,
+                CAST(substr(c.caught_at, 12, 2) AS INTEGER) AS hour,
+                CAST(substr(c.caught_at, 15, 2) AS INTEGER) AS minute,
+                COUNT(*) AS count
+            FROM catches AS c
+            JOIN spots AS s ON s.id = c.spot_id
+            WHERE s.lat BETWEEN 20 AND 50
+              AND s.lng BETWEEN 120 AND 155
+              AND c.caught_at IS NOT NULL
+              AND length(c.caught_at) >= 16
+            GROUP BY c.spot_id, c.fish_name, hour, minute
+            ORDER BY c.spot_id, c.fish_name, hour, minute
+            """
+        ):
+            normalized_name = normalize_fish_name(str(row["fish_name"]), aliases)
+            key = (str(row["spot_id"]), normalized_name)
+            buckets = twenty_minute_counts.setdefault(key, [0] * 72)
+            hour = int(row["hour"])
+            minute = int(row["minute"])
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                bucket_index = hour * 3 + min(2, minute // 20)
+                buckets[bucket_index] += int(row["count"])
+
+        ranking_by_spot_month: dict[tuple[str, int], list[dict[str, object]]] = {}
+        for (spot_id, month, fish_name), count in monthly_counts.items():
+            ranking_by_spot_month.setdefault((spot_id, month), []).append(
+                {"fish_name": fish_name, "count": count}
+            )
+
+        payload: dict[str, dict[str, list[dict[str, object]]]] = {}
+        for (spot_id, month), items in ranking_by_spot_month.items():
+            top_items = sorted(
+                items,
+                key=lambda item: (-int(item["count"]), str(item["fish_name"])),
+            )[:3]
+            payload.setdefault(spot_id, {})[str(month)] = [
+                {
+                    "fish_name": str(item["fish_name"]),
+                    "count": int(item["count"]),
+                    "twenty_minute_counts": twenty_minute_counts.get(
+                        (spot_id, str(item["fish_name"])),
+                        [0] * 72,
+                    ),
+                }
+                for item in top_items
+            ]
+        return {
+            "spot_month_top3": payload,
+            "metadata": {
+                "oldest": oldest,
+                "newest": newest,
+                "fish_aliases_applied": True,
+                "detail_period_scope": "all_time",
+            },
+        }
+    finally:
+        connection.close()
+
+
+def write_json(output: Path, payload: dict) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
+
+
+def export_statistics(
+    database: Path,
+    output: Path,
+    detail_output: Path | None = None,
+) -> None:
+    payload = query_statistics(database)
+    write_json(output, payload)
     print(f"statistics_json={output}")
     print(f"spots={len(payload['spots'])}")
     print(f"catch_groups={len(payload['catches'])}")
     metadata = payload.get("metadata", {})
     print(f"period={metadata.get('oldest')}..{metadata.get('newest')}")
+    effective_detail_output = detail_output
+    if effective_detail_output is None and output.name == DEFAULT_STATISTICS_JSON.name:
+        effective_detail_output = output.with_name(DEFAULT_DETAIL_STATISTICS_JSON.name)
+    if effective_detail_output is not None:
+        detail_payload = query_detail_statistics(database)
+        write_json(effective_detail_output, detail_payload)
+        print(f"detail_statistics_json={effective_detail_output}")
+        print(f"detail_spots={len(detail_payload.get('spot_month_top3', {}))}")
 
 
 def print_startup_summary(database: Path) -> None:
@@ -187,6 +305,26 @@ def make_handler(database: Path):
                     self.end_headers()
                     self.wfile.write(body)
                 return
+            if request_path == "/api/detail-statistics":
+                try:
+                    payload = query_detail_statistics(database)
+                    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except (sqlite3.Error, OSError) as error:
+                    body = json.dumps(
+                        {"error": str(error)}, ensure_ascii=False
+                    ).encode("utf-8")
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                return
             if request_path in PUBLIC_PATHS or request_path.startswith(PUBLIC_PREFIXES):
                 super().do_GET()
                 return
@@ -211,13 +349,23 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="集計済みJSONを書き出して終了する保存先。静的公開用。",
     )
+    parser.add_argument(
+        "--export-detail-statistics",
+        type=Path,
+        default=None,
+        help="詳細ページ用の時間帯別集計JSONを書き出して終了する保存先。",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     if args.export_statistics is not None:
-        export_statistics(args.database, args.export_statistics)
+        export_statistics(
+            args.database,
+            args.export_statistics,
+            args.export_detail_statistics,
+        )
         return
     print_startup_summary(args.database)
     server = ThreadingHTTPServer(
