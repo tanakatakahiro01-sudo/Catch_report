@@ -2,7 +2,7 @@ const app = document.querySelector("#app");
 const headerControls = document.querySelector("#header-controls");
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 const ENABLE_FISH_ILLUSTRATIONS = true;
-const APP_ASSET_VERSION = "20260628-national-popup-top3-v1";
+const APP_ASSET_VERSION = "20260628-affiliate-fallback-v1";
 const STATIC_STATISTICS_URL = new URL(
   `./data/statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -19,6 +19,10 @@ const STATIC_AFFILIATE_URL = new URL(
   `./data/affiliate_url.json?v=${APP_ASSET_VERSION}`,
   window.location.href
 ).toString();
+const STATIC_AFFILIATE_FALLBACKS_URL = new URL(
+  `./data/affiliate_fallbacks.json?v=${APP_ASSET_VERSION}`,
+  window.location.href
+).toString();
 const API_STATISTICS_URL = new URL("./api/statistics", window.location.href).toString();
 const API_DETAIL_STATISTICS_URL = new URL(
   "./api/detail-statistics",
@@ -29,6 +33,7 @@ let CATCH_RECORDS = [];
 let SPOT_TOTAL_COUNTS = new Map();
 let FISH_ILLUSTRATION_PATHS = {};
 let FISH_AFFILIATE_URLS = {};
+let FISH_AFFILIATE_FALLBACKS = {};
 let DETAIL_MONTHLY_TOP3 = {};
 let detailStatisticsPromise = null;
 let selectedSpotId = null;
@@ -476,6 +481,36 @@ function mapAttributionMarkup() {
   `;
 }
 
+function visibleSpotLimitForZoom(zoom, totalSpots) {
+  if (totalSpots <= 0) return 0;
+  if (zoom < 5.4) return Math.min(totalSpots, 180);
+  if (zoom < 6.2) return Math.min(totalSpots, 360);
+  if (zoom < 7) return Math.min(totalSpots, 720);
+  if (zoom < 7.8) return Math.min(totalSpots, 1200);
+  if (zoom < 8.6) return Math.min(totalSpots, 1600);
+  return totalSpots;
+}
+
+function visibleFeatureCollectionForZoom(allFeatures, zoom) {
+  const limit = visibleSpotLimitForZoom(zoom, allFeatures.length);
+  return {
+    limit,
+    data: {
+      type: "FeatureCollection",
+      features: allFeatures.slice(0, limit)
+    }
+  };
+}
+
+function applyVisibleSpotFilter(allFeatures) {
+  if (!activeMap || !activeMap.isStyleLoaded()) return;
+  const source = activeMap.getSource("catch-spots");
+  if (!source) return;
+  const { limit, data } = visibleFeatureCollectionForZoom(allFeatures, activeMap.getZoom());
+  source.setData(data);
+  updateHeaderResultCount(limit);
+}
+
 function renderMapLibreMap(spotResults, colorRanks) {
   const container = document.querySelector("#catch-map");
   if (!container) return;
@@ -489,7 +524,14 @@ function renderMapLibreMap(spotResults, colorRanks) {
     return;
   }
 
-  const features = spotResults
+  const rankedSpots = [...spotResults].sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    if (b.totalCount !== a.totalCount) return b.totalCount - a.totalCount;
+    return String(a.id).localeCompare(String(b.id), "ja");
+  });
+
+  const rankMap = new Map(rankedSpots.map((spot, index) => [String(spot.id), index + 1]));
+  const features = rankedSpots
     .filter((spot) => Number.isFinite(Number(spot.lat)) && Number.isFinite(Number(spot.lng)))
     .map((spot) => ({
       type: "Feature",
@@ -502,13 +544,14 @@ function renderMapLibreMap(spotResults, colorRanks) {
         name: spot.spot_name,
         count: spot.count,
         totalCount: spot.totalCount,
-        color: markerColor(spot.count, colorRanks)
+        color: markerColor(spot.count, colorRanks),
+        visibilityRank: rankMap.get(String(spot.id)) || Number.MAX_SAFE_INTEGER
       }
     }));
-  const featureCollection = {
-    type: "FeatureCollection",
-    features
-  };
+  const initialFeatures = visibleFeatureCollectionForZoom(
+    features,
+    mapCameraState?.zoom ?? 4.7
+  );
 
   const addCatchLayers = () => {
     if (!activeMap || !activeMap.isStyleLoaded()) return;
@@ -520,7 +563,7 @@ function renderMapLibreMap(spotResults, colorRanks) {
 
     activeMap.addSource("catch-spots", {
       type: "geojson",
-      data: featureCollection
+      data: initialFeatures.data
     });
 
     activeMap.addLayer({
@@ -589,6 +632,8 @@ function renderMapLibreMap(spotResults, colorRanks) {
         "text-halo-width": 1.6
       }
     });
+
+    applyVisibleSpotFilter(features);
   };
 
   activeMap = new maplibregl.Map({
@@ -625,6 +670,7 @@ function renderMapLibreMap(spotResults, colorRanks) {
       bearing: activeMap.getBearing(),
       pitch: activeMap.getPitch()
     };
+    applyVisibleSpotFilter(features);
   });
 
   activeMap.on("click", "catch-spots", (event) => {
@@ -690,7 +736,7 @@ function renderMapScreen() {
     </section>
   `;
 
-  updateHeaderResultCount(spotResults.length);
+  updateHeaderResultCount(visibleSpotLimitForZoom(mapCameraState?.zoom ?? 4.7, spotResults.length));
   renderMapLibreMap(spotResults, colorRanks);
   renderSpotBottomSheet();
 }
@@ -791,9 +837,30 @@ async function loadDetailStatistics() {
 }
 
 function affiliateLinksForFish(fish) {
-  const entry = FISH_AFFILIATE_URLS[fish];
-  if (!entry || entry.status !== "ok" || !Array.isArray(entry.affiliate_links)) return [];
-  return entry.affiliate_links;
+  const visited = new Set();
+  let currentFish = fish;
+  while (currentFish && !visited.has(currentFish)) {
+    visited.add(currentFish);
+    const entry = FISH_AFFILIATE_URLS[currentFish];
+    if (entry && entry.status === "ok" && Array.isArray(entry.affiliate_links)) {
+      return entry.affiliate_links;
+    }
+    currentFish = FISH_AFFILIATE_FALLBACKS[currentFish] || "";
+  }
+  return [];
+}
+
+function expandAffiliateFallbackGroups(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  const expanded = {};
+  Object.entries(payload).forEach(([canonicalFish, linkedFish]) => {
+    if (!Array.isArray(linkedFish)) return;
+    linkedFish.forEach((fish) => {
+      if (typeof fish !== "string" || fish.length === 0) return;
+      expanded[fish] = canonicalFish;
+    });
+  });
+  return expanded;
 }
 
 function shuffleCards(items) {
@@ -823,6 +890,14 @@ function pickAffiliateCards(fish, limit = 2) {
     });
 }
 
+function renderNoImageMarkup(label = "NoImage", extraClass = "") {
+  return `
+    <div class="affiliate-noimage${extraClass ? ` ${extraClass}` : ""}">
+      <span>${escapeHtml(label)}</span>
+    </div>
+  `;
+}
+
 function renderAffiliateCards(cards, options = {}) {
   const { variant = "map" } = options;
   if (!cards.length) {
@@ -837,7 +912,7 @@ function renderAffiliateCards(cards, options = {}) {
             ${
               card.imageUrl
                 ? `<div class="affiliate-card-image-wrap"><img class="affiliate-card-image" src="${escapeHtml(card.imageUrl)}" alt="${escapeHtml(card.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`
-                : `<div class="affiliate-card-image-wrap affiliate-card-image-fallback"><span>${escapeHtml(card.fish)}</span></div>`
+                : `<div class="affiliate-card-image-wrap affiliate-card-image-fallback">${renderNoImageMarkup()}</div>`
             }
           </a>
           <a class="affiliate-card-title" href="${escapeHtml(card.url)}" target="_blank" rel="nofollow sponsored noopener noreferrer">${escapeHtml(card.name)}</a>
@@ -860,9 +935,7 @@ function renderSingleAffiliateCard(card, fish) {
     return `
       <div class="histogram-affiliate-card histogram-affiliate-card-empty">
         <div class="histogram-affiliate-image-wrap">
-          <img class="histogram-affiliate-image" src="${escapeHtml(
-            currentTargetIllustrationUrl(fish)
-          )}" alt="${escapeHtml(fish)}" loading="lazy" decoding="async">
+          ${renderNoImageMarkup("NoImage", "affiliate-noimage-histogram")}
         </div>
         <p class="histogram-affiliate-name">${escapeHtml(fish)}</p>
       </div>
@@ -881,9 +954,7 @@ function renderSingleAffiliateCard(card, fish) {
             ? `<img class="histogram-affiliate-image" src="${escapeHtml(
                 card.imageUrl
               )}" alt="${escapeHtml(card.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
-            : `<img class="histogram-affiliate-image" src="${escapeHtml(
-                currentTargetIllustrationUrl(fish)
-              )}" alt="${escapeHtml(fish)}" loading="lazy" decoding="async">`
+            : renderNoImageMarkup("NoImage", "affiliate-noimage-histogram")
         }
       </div>
       <p class="histogram-affiliate-name">${escapeHtml(card.name)}</p>
@@ -891,13 +962,29 @@ function renderSingleAffiliateCard(card, fish) {
   `;
 }
 
+function renderHistogramAffiliateCards(cards, fish) {
+  if (!cards.length) {
+    return renderSingleAffiliateCard(null, fish);
+  }
+  return `
+    <div class="histogram-affiliate-grid">
+      ${cards.map((card) => renderSingleAffiliateCard(card, fish)).join("")}
+    </div>
+  `;
+}
+
+function isMobileViewport() {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 560px)").matches;
+}
+
 function renderHourlyHistogramSvg(timeCounts, label) {
-  const width = 540;
-  const height = 188;
-  const chartLeft = 32;
-  const chartRight = 18;
-  const chartTop = 14;
-  const chartBottom = 35;
+  const isMobileHistogram = isMobileViewport();
+  const width = isMobileHistogram ? 500 : 540;
+  const height = isMobileHistogram ? 230 : 188;
+  const chartLeft = isMobileHistogram ? 42 : 32;
+  const chartRight = isMobileHistogram ? 12 : 18;
+  const chartTop = isMobileHistogram ? 12 : 14;
+  const chartBottom = isMobileHistogram ? 42 : 35;
   const chartWidth = width - chartLeft - chartRight;
   const chartHeight = height - chartTop - chartBottom;
   const pointsPerDay = Array.isArray(timeCounts) && timeCounts.length === 72 ? 72 : 24;
@@ -982,7 +1069,7 @@ function renderHourlyHistogramSvg(timeCounts, label) {
   const labels = xLabels
     .map(({ bucket, text }) => {
       const x = chartLeft + (chartWidth * bucket) / (pointsPerDay - 1);
-      return `<text x="${x.toFixed(2)}" y="${height - 8}" text-anchor="middle" class="histogram-axis-label">${text}</text>`;
+      return `<text x="${x.toFixed(2)}" y="${height - (isMobileHistogram ? 10 : 8)}" text-anchor="middle" class="histogram-axis-label">${text}</text>`;
     })
     .join("");
 
@@ -1208,6 +1295,7 @@ function renderDetailScreen(spotId) {
       const currentMonthItems = currentMonthRanking.length
         ? currentMonthRanking
             .map((item, index) => {
+              const histogramAffiliateLimit = isMobileViewport() ? 2 : 1;
               const timeCounts = Array.isArray(item.twenty_minute_counts)
                 ? item.twenty_minute_counts.slice(0, 72)
                 : Array.isArray(item.ten_minute_counts)
@@ -1225,7 +1313,10 @@ function renderDetailScreen(spotId) {
               ) {
                 timeCounts.push(0);
               }
-              const affiliateCard = pickAffiliateCards(item.fish_name, 1)[0] || null;
+              const affiliateCards = pickAffiliateCards(
+                item.fish_name,
+                histogramAffiliateLimit
+              );
               return `
                 <li class="time-histogram-card">
                   <div class="time-histogram-main">
@@ -1247,7 +1338,7 @@ function renderDetailScreen(spotId) {
                     ${renderHourlyHistogramSvg(timeCounts, item.fish_name)}
                   </div>
                   <aside class="time-histogram-side">
-                    ${renderSingleAffiliateCard(affiliateCard, item.fish_name)}
+                    ${renderHistogramAffiliateCards(affiliateCards, item.fish_name)}
                   </aside>
                 </li>
               `;
@@ -1400,6 +1491,19 @@ async function loadStatistics() {
       }
     } catch (_error) {
       FISH_AFFILIATE_URLS = {};
+    }
+
+    try {
+      const affiliateFallbackResponse = await fetch(STATIC_AFFILIATE_FALLBACKS_URL, {
+        cache: "no-store"
+      });
+      if (affiliateFallbackResponse.ok) {
+        FISH_AFFILIATE_FALLBACKS = expandAffiliateFallbackGroups(
+          await affiliateFallbackResponse.json()
+        );
+      }
+    } catch (_error) {
+      FISH_AFFILIATE_FALLBACKS = {};
     }
 
     let response = await fetch(STATIC_STATISTICS_URL, { cache: "no-store" });

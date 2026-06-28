@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import sqlite3
+import subprocess
+import time
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,11 +28,90 @@ PUBLIC_PATHS = {
     "/japan-map-data.js",
     "/app.js",
     "/data/fish_illustrations.json",
+    "/data/affiliate_url.json",
+    "/data/affiliate_fallbacks.json",
     "/data/statistics.json",
     "/data/detail_statistics.json",
 }
 PUBLIC_PREFIXES = ("/data/fish_slices/",)
 DEFAULT_MIN_SPOT_COUNT = 100
+
+
+def stop_stale_local_servers(port: int) -> None:
+    current_pid = os.getpid()
+    try:
+        result = subprocess.run(
+            ["lsof", "-n", "-P", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpc"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return
+
+    target_pids: list[int] = []
+    current_entry: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        prefix, value = line[0], line[1:]
+        if prefix == "p":
+            if current_entry:
+                pid_text = current_entry.get("pid", "")
+                command = current_entry.get("command", "")
+                if pid_text.isdigit():
+                    pid = int(pid_text)
+                    if pid != current_pid and command == "Python":
+                        target_pids.append(pid)
+            current_entry = {"pid": value}
+        elif prefix == "c":
+            current_entry["command"] = value
+
+    if current_entry:
+        pid_text = current_entry.get("pid", "")
+        command = current_entry.get("command", "")
+        if pid_text.isdigit():
+            pid = int(pid_text)
+            if pid != current_pid and command == "Python":
+                target_pids.append(pid)
+
+    for pid in target_pids:
+        try:
+            command_result = subprocess.run(
+                ["ps", "-o", "command=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            continue
+        command_line = command_result.stdout.strip()
+        if (
+            f"python -m http.server {port}" not in command_line
+            and not command_line.endswith("Python server.py")
+            and "Python server.py " not in command_line
+        ):
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            continue
+        deadline = time.time() + 1.5
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                print(f"stopped_stale_server pid={pid}")
+                break
+            time.sleep(0.05)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                print(f"killed_stale_server pid={pid}")
+            except (ProcessLookupError, PermissionError):
+                pass
 
 
 def query_statistics(database: Path) -> dict:
@@ -368,12 +451,18 @@ def main() -> None:
         )
         return
     print_startup_summary(args.database)
+    stop_stale_local_servers(args.port)
     server = ThreadingHTTPServer(
         (args.host, args.port),
         make_handler(args.database),
     )
     print(f"Serving on http://{args.host}:{args.port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("Stopping server...")
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

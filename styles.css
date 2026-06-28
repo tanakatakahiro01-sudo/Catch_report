@@ -1318,6 +1318,13 @@ th {
   transform: none;
 }
 
+.histogram-affiliate-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  width: 100%;
+}
+
 .histogram-affiliate-card {
   display: grid;
   grid-template-columns: 1fr;
@@ -1474,11 +1481,25 @@ th {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+}
+
+.affiliate-noimage {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
   padding: 12px;
   color: var(--muted);
   font-family: var(--serif);
   font-size: 18px;
   text-align: center;
+  letter-spacing: 0.04em;
+}
+
+.affiliate-noimage-histogram {
+  font-size: 16px;
 }
 
 .affiliate-card-image {
@@ -1724,7 +1745,7 @@ th {
 @media (max-width: 560px) {
   .detail-page,
   .not-found {
-    width: min(100% - 24px, 1180px);
+    width: min(100% - 4px, 1180px);
   }
 
   .header-controls {
@@ -1736,6 +1757,11 @@ th {
   .detail-page {
     padding-bottom: 124px;
   }
+
+  .data-section {
+    padding: 14px 6px;
+  }
+
 
   .map-page {
     width: 100%;
@@ -1852,7 +1878,7 @@ th {
   .affiliate-card-inline,
   .affiliate-card-detail-fixed {
     grid-template-columns: 72px minmax(0, 1fr);
-    width: calc((100vw - 56px) * 0.4875);
+    width: calc((100vw - 32px) / 2);
     gap: 3px;
     min-height: 72px;
     padding: 4px 6px;
@@ -1904,8 +1930,8 @@ th {
   }
 
   .time-histogram-card {
-    gap: 14px;
-    padding: 14px;
+    gap: 10px;
+    padding: 10px 4px;
   }
 
   .time-histogram-header {
@@ -1918,32 +1944,55 @@ th {
   }
 
   .time-histogram-title {
-    grid-template-columns: 24px 60px minmax(0, 1fr);
-    gap: 8px;
+    grid-template-columns: 22px 54px minmax(0, 1fr);
+    gap: 6px;
   }
 
   .time-histogram-rank {
-    font-size: 18px;
+    font-size: 16px;
   }
 
   .time-histogram-illustration {
-    width: 60px;
-    height: 45px;
+    width: 54px;
+    height: 40px;
   }
 
   .time-histogram-title strong {
-    font-size: 17px;
+    font-size: 18px;
+  }
+
+  .time-histogram-svg {
+    width: 100%;
+    max-width: 100%;
   }
 
   .histogram-affiliate-card {
     grid-template-columns: 1fr;
-    grid-template-rows: 200px minmax(0, 1fr);
-    height: 280px;
+    grid-template-rows: 120px minmax(0, 1fr);
+    width: min(100%, 220px);
+    height: 188px;
     padding: 6px;
   }
 
   .histogram-affiliate-name {
     font-size: 11px;
+  }
+
+  .histogram-axis-label {
+    font-size: 18px;
+  }
+
+  .histogram-y-axis-label {
+    font-size: 18px;
+  }
+
+  .time-histogram-side {
+    justify-content: flex-end;
+  }
+
+  .histogram-affiliate-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
   }
 
   .section-heading {
