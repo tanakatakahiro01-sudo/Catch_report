@@ -2,7 +2,7 @@ const app = document.querySelector("#app");
 const headerControls = document.querySelector("#header-controls");
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 const ENABLE_FISH_ILLUSTRATIONS = true;
-const APP_ASSET_VERSION = "20260628-affiliate-fallback-v1";
+const APP_ASSET_VERSION = "20260630-popup-sticky-link-v1";
 const STATIC_STATISTICS_URL = new URL(
   `./data/statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -11,6 +11,7 @@ const STATIC_DETAIL_STATISTICS_URL = new URL(
   `./data/detail_statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
 ).toString();
+const STATIC_NEXT_6H_BASE_URL = new URL("./data/next6h/", window.location.href).toString();
 const STATIC_ILLUSTRATIONS_URL = new URL(
   `./data/fish_illustrations.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -35,6 +36,12 @@ let FISH_ILLUSTRATION_PATHS = {};
 let FISH_AFFILIATE_URLS = {};
 let FISH_AFFILIATE_FALLBACKS = {};
 let DETAIL_MONTHLY_TOP3 = {};
+let DETAIL_SPOT_FISH_TIME_COUNTS = {};
+let DETAIL_STATISTICS_METADATA = {};
+let DETAIL_NEXT_6H_TOP3 = {};
+let DETAIL_STATISTICS_LOADED = false;
+let NEXT_6H_STATISTICS_LOADED = false;
+let next6hStatisticsPromise = null;
 let detailStatisticsPromise = null;
 let selectedSpotId = null;
 
@@ -66,6 +73,20 @@ let fishNames = [];
 
 function formatCount(value) {
   return numberFormatter.format(value);
+}
+
+function formatJapaneseDate(value) {
+  if (!value || typeof value !== "string") return "";
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  if (!year || !month || !day) return value;
+  return `${year}年${month}月${day}日`;
+}
+
+function detailStatisticsPeriodText() {
+  const oldest = formatJapaneseDate(DETAIL_STATISTICS_METADATA.oldest);
+  const newest = formatJapaneseDate(DETAIL_STATISTICS_METADATA.newest);
+  if (!oldest || !newest) return "";
+  return `集計期間: ${oldest}〜${newest}`;
 }
 
 function escapeHtml(value) {
@@ -814,6 +835,148 @@ function monthlyTopFishForSpot(spotId, month) {
   return (DETAIL_MONTHLY_TOP3[spotId] && DETAIL_MONTHLY_TOP3[spotId][String(month)]) || [];
 }
 
+function seasonalPeriodForDate(date) {
+  const day = date.getDate();
+  if (day <= 10) return "early";
+  if (day <= 20) return "middle";
+  return "late";
+}
+
+function nextSixHourStatisticsUrl(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const period = seasonalPeriodForDate(date);
+  const hour = String(date.getHours()).padStart(2, "0");
+  return `${STATIC_NEXT_6H_BASE_URL}${month}-${period}-${hour}.json?v=${APP_ASSET_VERSION}`;
+}
+
+function nextSixHourTopFishForSpot(spotId, date = new Date()) {
+  const items = DETAIL_NEXT_6H_TOP3[spotId] || [];
+  return items
+    .map((item) => {
+      if (Array.isArray(item)) {
+        return { fish_name: item[0], count: Number(item[1]) || 0 };
+      }
+      return item;
+    })
+    .filter((item) => item && typeof item.fish_name === "string" && item.fish_name.length > 0);
+}
+
+async function loadNext6hStatistics() {
+  if (next6hStatisticsPromise) return next6hStatisticsPromise;
+  next6hStatisticsPromise = (async () => {
+    const response = await fetch(nextSixHourStatisticsUrl(), { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`6時間集計データがHTTP ${response.status}を返しました。`);
+    }
+    DETAIL_NEXT_6H_TOP3 = await response.json();
+    NEXT_6H_STATISTICS_LOADED = true;
+    return DETAIL_NEXT_6H_TOP3;
+  })();
+  try {
+    return await next6hStatisticsPromise;
+  } catch (error) {
+    next6hStatisticsPromise = null;
+    NEXT_6H_STATISTICS_LOADED = false;
+    throw error;
+  }
+}
+
+function renderNextSixHourTop3(items, options = {}) {
+  const { compact = false, showRank = false } = options;
+  if (!items.length) {
+    return `<p class="${compact ? "next-6h-empty next-6h-empty-compact" : "next-6h-empty"}">この時間帯の実績はまだありません</p>`;
+  }
+  const classNames = ["next-6h-list"];
+  if (compact) classNames.push("next-6h-list-compact");
+  if (!showRank) classNames.push("next-6h-list-unranked");
+  return `
+    <ul class="${classNames.join(" ")}">
+      ${items
+        .map(
+          (item, index) => `
+            <li>
+              ${showRank ? `<span>${index + 1}</span>` : ""}
+              <strong>${escapeHtml(item.fish_name)}</strong>
+            </li>
+          `
+        )
+        .join("")}
+    </ul>
+  `;
+}
+
+function renderPopupMiniTimeGraph(timeCounts, label) {
+  const width = 169;
+  const height = 55;
+  const paddingX = 32;
+  const paddingY = 5;
+  const chartRight = 5;
+  const chartWidth = width - paddingX - chartRight;
+  const chartHeight = 36;
+  const counts = Array.isArray(timeCounts) ? timeCounts.slice(0, 72) : [];
+  while (counts.length < 72) counts.push(0);
+  const smoothedCounts = counts.map((_, index, array) => {
+    const start = Math.max(0, index - 3);
+    const end = Math.min(array.length, index + 4);
+    const windowValues = array.slice(start, end);
+    const sum = windowValues.reduce((acc, value) => acc + value, 0);
+    return sum / windowValues.length;
+  });
+  const maxCount = Math.max(...smoothedCounts, 1);
+  const points = smoothedCounts.map((count, index) => {
+    const x = paddingX + (chartWidth * index) / 71;
+    const y = paddingY + chartHeight - (count / maxCount) * chartHeight;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const currentBucket = (new Date().getHours() * 60 + new Date().getMinutes()) / 20;
+  const nowX = paddingX + (chartWidth * Math.min(71, currentBucket)) / 71;
+  return `
+    <svg class="popup-mini-graph" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+      label
+    )} の簡易時間帯グラフ">
+      <text x="16" y="${paddingY + chartHeight / 2}" text-anchor="middle" dominant-baseline="middle" class="popup-mini-graph-y-label">釣果</text>
+      <line x1="${paddingX}" y1="${paddingY}" x2="${paddingX}" y2="${
+        paddingY + chartHeight
+      }" class="popup-mini-graph-y-axis"></line>
+      <line x1="${paddingX}" y1="${paddingY + chartHeight}" x2="${width - chartRight}" y2="${
+        paddingY + chartHeight
+      }" class="popup-mini-graph-base"></line>
+      <polyline points="${points.join(" ")}" class="popup-mini-graph-line"></polyline>
+      <line x1="${nowX.toFixed(2)}" y1="${paddingY}" x2="${nowX.toFixed(2)}" y2="${
+        paddingY + chartHeight
+      }" class="popup-mini-graph-now"></line>
+      <text x="${paddingX}" y="${height - 2}" text-anchor="start" class="popup-mini-graph-axis-label">0時</text>
+      <text x="${width / 2}" y="${height - 2}" text-anchor="middle" class="popup-mini-graph-axis-label">12時</text>
+      <text x="${width - chartRight}" y="${height - 2}" text-anchor="end" class="popup-mini-graph-axis-label">24時</text>
+    </svg>
+  `;
+}
+
+function renderPopupNextSixHourGraphs(spotId, items) {
+  if (!items.length) {
+    return '<p class="next-6h-empty next-6h-empty-compact">この時間帯の実績はまだありません</p>';
+  }
+  if (!DETAIL_STATISTICS_LOADED) {
+    return '<p class="next-6h-empty next-6h-empty-compact">グラフを読み込んでいます</p>';
+  }
+  const timeCountsByFish = DETAIL_SPOT_FISH_TIME_COUNTS[spotId] || {};
+  return `
+    <ul class="popup-mini-graph-list">
+      ${items
+        .map((item) => {
+          const timeCounts = timeCountsByFish[item.fish_name] || [];
+          return `
+            <li>
+              <strong>${escapeHtml(item.fish_name)}</strong>
+              ${renderPopupMiniTimeGraph(timeCounts, item.fish_name)}
+            </li>
+          `;
+        })
+        .join("")}
+    </ul>
+  `;
+}
+
 async function loadDetailStatistics() {
   if (detailStatisticsPromise) return detailStatisticsPromise;
   detailStatisticsPromise = (async () => {
@@ -826,12 +989,16 @@ async function loadDetailStatistics() {
     }
     const payload = await response.json();
     DETAIL_MONTHLY_TOP3 = payload.spot_month_top3 || {};
-    return DETAIL_MONTHLY_TOP3;
+    DETAIL_SPOT_FISH_TIME_COUNTS = payload.spot_fish_time_counts || {};
+    DETAIL_STATISTICS_METADATA = payload.metadata || {};
+    DETAIL_STATISTICS_LOADED = true;
+    return payload;
   })();
   try {
     return await detailStatisticsPromise;
   } catch (error) {
     detailStatisticsPromise = null;
+    DETAIL_STATISTICS_LOADED = false;
     throw error;
   }
 }
@@ -930,6 +1097,49 @@ function renderAffiliateCards(cards, options = {}) {
   `;
 }
 
+function renderFishAffiliateGroups(items) {
+  const groups = items
+    .map((item) => ({
+      fish: item.fish_name,
+      cards: pickAffiliateCards(item.fish_name, 2)
+    }))
+    .filter((group) => group.cards.length > 0);
+  if (!groups.length) {
+    return '<p class="current-target-empty">おすすめアイテムはまだありません</p>';
+  }
+  return `
+    <div class="fish-affiliate-groups">
+      ${groups
+        .map(
+          (group) => `
+            <section class="fish-affiliate-group">
+              <h3>${escapeHtml(group.fish)}</h3>
+              <div class="fish-affiliate-cards">
+                ${group.cards
+                  .map(
+                    (card) => `
+                      <article class="affiliate-card affiliate-card-detail">
+                        <a class="affiliate-card-image-link" href="${escapeHtml(card.url)}" target="_blank" rel="nofollow sponsored noopener noreferrer" aria-label="${escapeHtml(card.name)}">
+                          ${
+                            card.imageUrl
+                              ? `<div class="affiliate-card-image-wrap"><img class="affiliate-card-image" src="${escapeHtml(card.imageUrl)}" alt="${escapeHtml(card.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`
+                              : `<div class="affiliate-card-image-wrap affiliate-card-image-fallback">${renderNoImageMarkup()}</div>`
+                          }
+                        </a>
+                        <a class="affiliate-card-title" href="${escapeHtml(card.url)}" target="_blank" rel="nofollow sponsored noopener noreferrer">${escapeHtml(card.name)}</a>
+                      </article>
+                    `
+                  )
+                  .join("")}
+              </div>
+            </section>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
 function renderSingleAffiliateCard(card, fish) {
   if (!card) {
     return `
@@ -983,7 +1193,7 @@ function renderHourlyHistogramSvg(timeCounts, label) {
   const height = isMobileHistogram ? 230 : 188;
   const chartLeft = isMobileHistogram ? 42 : 32;
   const chartRight = isMobileHistogram ? 12 : 18;
-  const chartTop = isMobileHistogram ? 12 : 14;
+  const chartTop = isMobileHistogram ? 34 : 34;
   const chartBottom = isMobileHistogram ? 42 : 35;
   const chartWidth = width - chartLeft - chartRight;
   const chartHeight = height - chartTop - chartBottom;
@@ -1072,6 +1282,16 @@ function renderHourlyHistogramSvg(timeCounts, label) {
       return `<text x="${x.toFixed(2)}" y="${height - (isMobileHistogram ? 10 : 8)}" text-anchor="middle" class="histogram-axis-label">${text}</text>`;
     })
     .join("");
+  const now = new Date();
+  const currentBucket = (now.getHours() * 60 + now.getMinutes()) / 20;
+  const nowX = chartLeft + (chartWidth * Math.min(pointsPerDay - 1, currentBucket)) / (pointsPerDay - 1);
+  const nowLabelY = chartTop - 10;
+  const nowMarker = `
+    <line x1="${nowX.toFixed(2)}" y1="${chartTop}" x2="${nowX.toFixed(2)}" y2="${(
+      chartTop + chartHeight
+    ).toFixed(2)}" class="histogram-now-line"></line>
+    <text x="${nowX.toFixed(2)}" y="${nowLabelY}" text-anchor="middle" class="histogram-now-label">現在</text>
+  `;
 
   return `
     <svg class="time-histogram-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
@@ -1101,6 +1321,7 @@ function renderHourlyHistogramSvg(timeCounts, label) {
       <path d="${areaPath}" class="histogram-area" fill="url(#${gradientId})"></path>
       <path d="${linePath}" class="histogram-line-shadow" filter="url(#${glowId})"></path>
       <path d="${linePath}" class="histogram-line"></path>
+      ${nowMarker}
       ${labels}
     </svg>
   `;
@@ -1132,31 +1353,10 @@ function renderSpotPopupContent(spotId) {
   if (!spot || records.length === 0) return "";
 
   const total = sumCounts(records);
-  const fishRanking = aggregateFish(records).slice(0, 3);
-  const heatmapMax = Math.max(...records.map((record) => record.count), 1);
-  const monthHeaders = Array.from({ length: 12 }, (_, index) => `<th>${index + 1}</th>`).join("");
-  const rows = fishRanking
-    .map((item) => {
-      const cells = Array.from({ length: 12 }, (_, index) => {
-        const month = index + 1;
-        const count = countFor(records, item.fish, month);
-        const intensity = heatmapIntensity(count, heatmapMax);
-        const toneClass = intensity >= 0.62 ? " is-strong" : "";
-        return `<td class="mini-heat-cell${toneClass}" style="--mini-intensity:${intensity.toFixed(
-          2
-        )}" aria-label="${escapeHtml(item.fish)} ${month}月 ${count}件">${count > 0 ? count : ""}</td>`;
-      }).join("");
-      return `
-        <tr>
-          <th scope="row">
-            <span class="mini-heat-fish">${escapeHtml(item.fish)}</span>
-            <span class="mini-heat-total">${formatCount(item.count)}件</span>
-          </th>
-          ${cells}
-        </tr>
-      `;
-    })
-    .join("");
+  const nextSixHourItems = nextSixHourTopFishForSpot(spotId);
+  const nextSixHourContent = NEXT_6H_STATISTICS_LOADED
+    ? renderPopupNextSixHourGraphs(spotId, nextSixHourItems)
+    : '<p class="next-6h-empty next-6h-empty-compact">時間帯データを読み込んでいます</p>';
 
   return `
     <section class="spot-sheet-card">
@@ -1167,16 +1367,12 @@ function renderSpotPopupContent(spotId) {
         </div>
         <strong>${formatCount(total)}件</strong>
       </header>
-      <div class="spot-popup-heatmap">
-        <table class="mini-heatmap-table">
-          <thead>
-            <tr>
-              <th>魚種</th>
-              ${monthHeaders}
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+      <div class="spot-popup-next-6h">
+        <div class="spot-popup-next-6h-heading">
+          <h4>直近6時間で狙える魚</h4>
+          <p class="popup-mini-graph-legend"><span></span>現在時刻</p>
+        </div>
+        ${nextSixHourContent}
       </div>
       <a class="spot-popup-link" href="#/spot/${encodeURIComponent(spotId)}">詳細を見る</a>
     </section>
@@ -1212,6 +1408,16 @@ function renderSpotBottomSheet() {
       renderSpotBottomSheet();
     });
   });
+  if (!DETAIL_STATISTICS_LOADED) {
+    loadDetailStatistics()
+      .then(() => {
+        if (selectedSpotId) renderSpotBottomSheet();
+      })
+      .catch(() => {
+        DETAIL_SPOT_FISH_TIME_COUNTS = {};
+        DETAIL_STATISTICS_METADATA = {};
+      });
+  }
 }
 
 function renderDetailScreen(spotId) {
@@ -1250,6 +1456,8 @@ function renderDetailScreen(spotId) {
   loadDetailStatistics()
     .catch(() => {
       DETAIL_MONTHLY_TOP3 = {};
+      DETAIL_SPOT_FISH_TIME_COUNTS = {};
+      DETAIL_STATISTICS_METADATA = {};
     })
     .finally(() => {
       if (selectedSpotId !== spotId) return;
@@ -1261,6 +1469,8 @@ function renderDetailScreen(spotId) {
       const currentMonth = new Date().getMonth() + 1;
       const heatmapMax = Math.max(...records.map((record) => record.count), 1);
       const currentMonthRanking = monthlyTopFishForSpot(spotId, currentMonth);
+      const nextSixHourItems = nextSixHourTopFishForSpot(spotId);
+      const detailPeriodText = detailStatisticsPeriodText();
 
       const heatmapRows = fishRanking
         .map((item) => {
@@ -1277,52 +1487,20 @@ function renderDetailScreen(spotId) {
         })
         .join("");
 
-      const monthlyRows = Array.from({ length: 12 }, (_, index) => {
-        const month = index + 1;
-        const ranking = allFishRanking
-          .map((item) => ({ fish: item.fish, count: countFor(records, item.fish, month) }))
-          .filter((item) => item.count > 0)
-          .sort((a, b) => b.count - a.count)
-          .slice(0, 3);
-        return `
-          <tr>
-            <th scope="row"><strong>${month}</strong><span>月</span></th>
-            <td>${ranking.map((item) => `<span>${item.fish}</span>`).join("")}</td>
-          </tr>
-        `;
-      });
-
-      const currentMonthItems = currentMonthRanking.length
-        ? currentMonthRanking
-            .map((item, index) => {
-              const histogramAffiliateLimit = isMobileViewport() ? 2 : 1;
-              const timeCounts = Array.isArray(item.twenty_minute_counts)
-                ? item.twenty_minute_counts.slice(0, 72)
-                : Array.isArray(item.ten_minute_counts)
-                  ? item.ten_minute_counts.slice(0, 144)
-                : Array.isArray(item.hourly_counts)
-                  ? item.hourly_counts.slice(0, 24)
-                  : Array.from({ length: 72 }, () => 0);
-              while (
-                timeCounts.length <
-                (Array.isArray(item.twenty_minute_counts)
-                  ? 72
-                  : Array.isArray(item.ten_minute_counts)
-                    ? 144
-                    : 24)
-              ) {
-                timeCounts.push(0);
-              }
-              const affiliateCards = pickAffiliateCards(
-                item.fish_name,
-                histogramAffiliateLimit
-              );
+      const timeCountsByFish = DETAIL_SPOT_FISH_TIME_COUNTS[spotId] || {};
+      const nextSixHourGraphItems = nextSixHourItems.length
+        ? nextSixHourItems
+            .map((item) => {
+              const timeSource = timeCountsByFish[item.fish_name];
+              const timeCounts = Array.isArray(timeSource)
+                ? timeSource.slice(0, 72)
+                : Array.from({ length: 72 }, () => 0);
+              while (timeCounts.length < 72) timeCounts.push(0);
               return `
-                <li class="time-histogram-card">
+                <li class="time-histogram-card time-histogram-card-compact">
                   <div class="time-histogram-main">
                     <div class="time-histogram-header">
                       <div class="time-histogram-title">
-                        <span class="time-histogram-rank">${index + 1}</span>
                         ${
                           ENABLE_FISH_ILLUSTRATIONS
                             ? `<img class="time-histogram-illustration" src="${currentTargetIllustrationUrl(
@@ -1337,17 +1515,16 @@ function renderDetailScreen(spotId) {
                     </div>
                     ${renderHourlyHistogramSvg(timeCounts, item.fish_name)}
                   </div>
-                  <aside class="time-histogram-side">
-                    ${renderHistogramAffiliateCards(affiliateCards, item.fish_name)}
-                  </aside>
                 </li>
               `;
             })
             .join("")
-        : '<li class="current-target-empty">今月の時間帯データはまだありません</li>';
+        : '<li class="current-target-empty">この時間帯の実績はまだありません</li>';
+
       const currentMonthAffiliateCards = currentMonthRanking
         .flatMap((item) => pickAffiliateCards(item.fish_name, 2))
         .slice(0, 6);
+      const currentMonthItems = renderFishAffiliateGroups(currentMonthRanking);
 
       app.innerHTML = `
         <article class="detail-page">
@@ -1368,11 +1545,33 @@ function renderDetailScreen(spotId) {
             </div>
           </header>
 
-          <section class="data-section heatmap-section">
+          <section class="data-section current-target-section">
             <div class="section-heading">
               <div>
                 <p class="section-number">01</p>
-                <h2>季節ごとの釣果傾向 Top10</h2>
+                <h2>直近6時間で狙える魚</h2>
+              </div>
+              <p>${escapeHtml(detailPeriodText || "全期間の釣果データを集計")}</p>
+            </div>
+            <ol class="time-histogram-list">${nextSixHourGraphItems}</ol>
+          </section>
+
+          <section class="data-section current-target-section">
+            <div class="section-heading">
+              <div>
+                <p class="section-number">02</p>
+                <h2>今月狙える魚におすすめ</h2>
+              </div>
+              <p>${currentMonth}月の投稿件数ベース</p>
+            </div>
+            <div class="current-month-affiliate-panel">${currentMonthItems}</div>
+          </section>
+
+          <section class="data-section heatmap-section">
+            <div class="section-heading">
+              <div>
+                <p class="section-number">03</p>
+                <h2>月別釣果実績</h2>
               </div>
               <div class="heat-legend"><span>件数</span><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span>多</span></div>
             </div>
@@ -1387,38 +1586,7 @@ function renderDetailScreen(spotId) {
                 <tbody>${heatmapRows}</tbody>
               </table>
             </div>
-            <p class="table-note">各月の件数を色と数値で示しています。色が濃いほど件数が多いことを表します。</p>
-          </section>
-
-          <section class="data-section current-target-section">
-            <div class="section-heading">
-              <div>
-                <p class="section-number">02</p>
-                <h2>今月狙える魚</h2>
-              </div>
-              <p>${currentMonth}月の投稿件数ベース</p>
-            </div>
-            <ol class="time-histogram-list">${currentMonthItems}</ol>
-          </section>
-
-          <section class="data-section monthly-section">
-            <div class="section-heading">
-              <div>
-                <p class="section-number">03</p>
-                <h2>月別ランキング</h2>
-              </div>
-              <p>各月の件数上位3魚種</p>
-            </div>
-            <div class="monthly-grid">
-              <table>
-                <thead><tr><th>月</th><th>件数上位の魚種</th></tr></thead>
-                <tbody>${monthlyRows.slice(0, 6).join("")}</tbody>
-              </table>
-              <table>
-                <thead><tr><th>月</th><th>件数上位の魚種</th></tr></thead>
-                <tbody>${monthlyRows.slice(6).join("")}</tbody>
-              </table>
-            </div>
+            <p class="table-note">${escapeHtml(detailPeriodText || "全期間の釣果データを集計")}。各月の件数を色と数値で示しています。</p>
           </section>
 
           <div class="affiliate-section">
@@ -1523,6 +1691,12 @@ async function loadStatistics() {
         (SPOT_TOTAL_COUNTS.get(record.spot_id) || 0) + record.count
       );
     });
+    try {
+      await loadNext6hStatistics();
+    } catch (_error) {
+      DETAIL_NEXT_6H_TOP3 = {};
+      NEXT_6H_STATISTICS_LOADED = false;
+    }
     fishNames = [...new Set(CATCH_RECORDS.map((record) => record.fish_name))].sort(
       (a, b) => a.localeCompare(b, "ja")
     );

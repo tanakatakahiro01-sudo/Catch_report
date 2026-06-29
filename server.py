@@ -10,6 +10,7 @@ import signal
 import sqlite3
 import subprocess
 import time
+from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +21,7 @@ from fish_name_aliases import load_fish_name_aliases, normalize_fish_name
 DEFAULT_DATABASE = Path("data/anglers_catches.db")
 DEFAULT_STATISTICS_JSON = Path("data/statistics.json")
 DEFAULT_DETAIL_STATISTICS_JSON = Path("data/detail_statistics.json")
+DEFAULT_NEXT_6H_DIR = Path("data/next6h")
 PUBLIC_PATHS = {
     "/",
     "/index.html",
@@ -33,8 +35,16 @@ PUBLIC_PATHS = {
     "/data/statistics.json",
     "/data/detail_statistics.json",
 }
-PUBLIC_PREFIXES = ("/data/fish_slices/",)
+PUBLIC_PREFIXES = ("/data/fish_slices/", "/data/next6h/")
 DEFAULT_MIN_SPOT_COUNT = 100
+
+
+def seasonal_period(day: int) -> str:
+    if day <= 10:
+        return "early"
+    if day <= 20:
+        return "middle"
+    return "late"
 
 
 def stop_stale_local_servers(port: int) -> None:
@@ -135,10 +145,17 @@ def query_statistics(database: Path) -> dict:
                 SELECT DISTINCT s.id, s.prefecture, s.spot_name, s.lat, s.lng
                 FROM spots AS s
                 JOIN catches AS c ON c.spot_id = s.id
+                JOIN (
+                    SELECT spot_id
+                    FROM catches
+                    GROUP BY spot_id
+                    HAVING COUNT(*) >= ?
+                ) AS visible ON visible.spot_id = s.id
                 WHERE s.lat BETWEEN 20 AND 50
                   AND s.lng BETWEEN 120 AND 155
                 ORDER BY s.prefecture, s.spot_name
-                """
+                """,
+                (DEFAULT_MIN_SPOT_COUNT,),
             )
         ]
 
@@ -152,11 +169,18 @@ def query_statistics(database: Path) -> dict:
                 COUNT(*) AS count
             FROM catches AS c
             JOIN spots AS s ON s.id = c.spot_id
+            JOIN (
+                SELECT spot_id
+                FROM catches
+                GROUP BY spot_id
+                HAVING COUNT(*) >= ?
+            ) AS visible ON visible.spot_id = s.id
             WHERE s.lat BETWEEN 20 AND 50
               AND s.lng BETWEEN 120 AND 155
             GROUP BY c.spot_id, c.fish_name, CAST(strftime('%Y', c.caught_date) AS INTEGER), month
             ORDER BY c.spot_id, c.fish_name, month
-            """
+            """,
+            (DEFAULT_MIN_SPOT_COUNT,),
         ):
             normalized_name = normalize_fish_name(str(row["fish_name"]), aliases)
             key = (str(row["spot_id"]), normalized_name, int(row["month"]))
@@ -190,7 +214,10 @@ def query_statistics(database: Path) -> dict:
 
 def query_detail_statistics(database: Path) -> dict:
     if not database.exists():
-        return {"spot_month_top3": {}, "metadata": {"oldest": None, "newest": None}}
+        return {
+            "spot_month_top3": {},
+            "metadata": {"oldest": None, "newest": None},
+        }
 
     connection = sqlite3.connect(database)
     connection.row_factory = sqlite3.Row
@@ -202,7 +229,10 @@ def query_detail_statistics(database: Path) -> dict:
         oldest = period["oldest"]
         newest = period["newest"]
         if newest is None or oldest is None:
-            return {"spot_month_top3": {}, "metadata": {"oldest": None, "newest": None}}
+            return {
+                "spot_month_top3": {},
+                "metadata": {"oldest": None, "newest": None},
+            }
 
         monthly_counts: dict[tuple[str, int, str], int] = {}
         for row in connection.execute(
@@ -214,11 +244,18 @@ def query_detail_statistics(database: Path) -> dict:
                 COUNT(*) AS count
             FROM catches AS c
             JOIN spots AS s ON s.id = c.spot_id
+            JOIN (
+                SELECT spot_id
+                FROM catches
+                GROUP BY spot_id
+                HAVING COUNT(*) >= ?
+            ) AS visible ON visible.spot_id = s.id
             WHERE s.lat BETWEEN 20 AND 50
               AND s.lng BETWEEN 120 AND 155
             GROUP BY c.spot_id, c.fish_name, CAST(strftime('%Y', c.caught_date) AS INTEGER), month
             ORDER BY c.spot_id, c.fish_name, month
-            """
+            """,
+            (DEFAULT_MIN_SPOT_COUNT,),
         ):
             normalized_name = normalize_fish_name(str(row["fish_name"]), aliases)
             key = (str(row["spot_id"]), int(row["month"]), normalized_name)
@@ -235,13 +272,20 @@ def query_detail_statistics(database: Path) -> dict:
                 COUNT(*) AS count
             FROM catches AS c
             JOIN spots AS s ON s.id = c.spot_id
+            JOIN (
+                SELECT spot_id
+                FROM catches
+                GROUP BY spot_id
+                HAVING COUNT(*) >= ?
+            ) AS visible ON visible.spot_id = s.id
             WHERE s.lat BETWEEN 20 AND 50
               AND s.lng BETWEEN 120 AND 155
               AND c.caught_at IS NOT NULL
               AND length(c.caught_at) >= 16
             GROUP BY c.spot_id, c.fish_name, hour, minute
             ORDER BY c.spot_id, c.fish_name, hour, minute
-            """
+            """,
+            (DEFAULT_MIN_SPOT_COUNT,),
         ):
             normalized_name = normalize_fish_name(str(row["fish_name"]), aliases)
             key = (str(row["spot_id"]), normalized_name)
@@ -268,15 +312,19 @@ def query_detail_statistics(database: Path) -> dict:
                 {
                     "fish_name": str(item["fish_name"]),
                     "count": int(item["count"]),
-                    "twenty_minute_counts": twenty_minute_counts.get(
-                        (spot_id, str(item["fish_name"])),
-                        [0] * 72,
-                    ),
                 }
                 for item in top_items
             ]
         return {
             "spot_month_top3": payload,
+            "spot_fish_time_counts": {
+                spot_id: {
+                    fish_name: counts
+                    for (source_spot_id, fish_name), counts in sorted(twenty_minute_counts.items())
+                    if source_spot_id == spot_id
+                }
+                for spot_id in sorted({spot_id for spot_id, _fish_name in twenty_minute_counts})
+            },
             "metadata": {
                 "oldest": oldest,
                 "newest": newest,
@@ -296,10 +344,104 @@ def write_json(output: Path, payload: dict) -> None:
     )
 
 
+def next_6h_filename(month: int, period: str, hour: int) -> str:
+    return f"{month:02d}-{period}-{hour:02d}.json"
+
+
+def query_next_6h_statistics(database: Path) -> dict[tuple[int, str, int], dict[str, list[list[object]]]]:
+    if not database.exists():
+        return {}
+
+    connection = sqlite3.connect(database)
+    connection.row_factory = sqlite3.Row
+    aliases = load_fish_name_aliases()
+    try:
+        counts: dict[tuple[int, str, int, str, str], int] = {}
+        for row in connection.execute(
+            """
+            SELECT
+                c.spot_id,
+                c.fish_name,
+                substr(c.caught_at, 1, 16) AS caught_at,
+                COUNT(*) AS count
+            FROM catches AS c
+            JOIN spots AS s ON s.id = c.spot_id
+            JOIN (
+                SELECT spot_id
+                FROM catches
+                GROUP BY spot_id
+                HAVING COUNT(*) >= ?
+            ) AS visible ON visible.spot_id = s.id
+            WHERE s.lat BETWEEN 20 AND 50
+              AND s.lng BETWEEN 120 AND 155
+              AND c.caught_at IS NOT NULL
+              AND length(c.caught_at) >= 16
+            GROUP BY c.spot_id, c.fish_name, caught_at
+            ORDER BY c.spot_id, c.fish_name, caught_at
+            """,
+            (DEFAULT_MIN_SPOT_COUNT,),
+        ):
+            caught_at = str(row["caught_at"])
+            try:
+                caught_dt = datetime.strptime(caught_at.replace("T", " "), "%Y-%m-%d %H:%M")
+            except ValueError:
+                continue
+            normalized_name = normalize_fish_name(str(row["fish_name"]), aliases)
+            count = int(row["count"])
+            for offset in range(6):
+                start_dt = caught_dt - timedelta(hours=offset)
+                key = (
+                    start_dt.month,
+                    seasonal_period(start_dt.day),
+                    start_dt.hour,
+                    str(row["spot_id"]),
+                    normalized_name,
+                )
+                counts[key] = counts.get(key, 0) + count
+
+        grouped: dict[tuple[int, str, int, str], list[dict[str, object]]] = {}
+        for (month, period, hour, spot_id, fish_name), count in counts.items():
+            grouped.setdefault((month, period, hour, spot_id), []).append(
+                {"fish_name": fish_name, "count": count}
+            )
+
+        payload: dict[tuple[int, str, int], dict[str, list[list[object]]]] = {}
+        for (month, period, hour, spot_id), items in grouped.items():
+            top_items = sorted(
+                items,
+                key=lambda item: (-int(item["count"]), str(item["fish_name"])),
+            )[:3]
+            payload.setdefault((month, period, hour), {})[spot_id] = [
+                [str(item["fish_name"]), int(item["count"])]
+                for item in top_items
+            ]
+        return payload
+    finally:
+        connection.close()
+
+
+def export_next_6h_statistics(database: Path, output_dir: Path) -> int:
+    payload = query_next_6h_statistics(database)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for old_file in output_dir.glob("*.json"):
+        old_file.unlink()
+
+    periods = ("early", "middle", "late")
+    written = 0
+    for month in range(1, 13):
+        for period in periods:
+            for hour in range(24):
+                data = payload.get((month, period, hour), {})
+                write_json(output_dir / next_6h_filename(month, period, hour), data)
+                written += 1
+    return written
+
+
 def export_statistics(
     database: Path,
     output: Path,
     detail_output: Path | None = None,
+    next_6h_output_dir: Path | None = None,
 ) -> None:
     payload = query_statistics(database)
     write_json(output, payload)
@@ -316,6 +458,10 @@ def export_statistics(
         write_json(effective_detail_output, detail_payload)
         print(f"detail_statistics_json={effective_detail_output}")
         print(f"detail_spots={len(detail_payload.get('spot_month_top3', {}))}")
+    if next_6h_output_dir is not None:
+        written = export_next_6h_statistics(database, next_6h_output_dir)
+        print(f"next_6h_dir={next_6h_output_dir}")
+        print(f"next_6h_files={written}")
 
 
 def print_startup_summary(database: Path) -> None:
@@ -438,6 +584,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="詳細ページ用の時間帯別集計JSONを書き出して終了する保存先。",
     )
+    parser.add_argument(
+        "--export-next-6h-dir",
+        type=Path,
+        default=None,
+        help="これから6時間Top3の分割JSONを書き出すディレクトリ。",
+    )
     return parser.parse_args()
 
 
@@ -448,6 +600,8 @@ def main() -> None:
             args.database,
             args.export_statistics,
             args.export_detail_statistics,
+            args.export_next_6h_dir
+            or args.export_statistics.with_name(DEFAULT_NEXT_6H_DIR.name),
         )
         return
     print_startup_summary(args.database)
