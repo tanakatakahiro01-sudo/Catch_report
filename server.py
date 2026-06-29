@@ -506,6 +506,12 @@ def print_startup_summary(database: Path) -> None:
 
 def make_handler(database: Path):
     class FishingRequestHandler(SimpleHTTPRequestHandler):
+        def handle_one_request(self) -> None:
+            try:
+                super().handle_one_request()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+
         def end_headers(self) -> None:
             request_path = urlparse(self.path).path
             if request_path in PUBLIC_PATHS or request_path.startswith(PUBLIC_PREFIXES):
