@@ -22,6 +22,7 @@ DEFAULT_DATABASE = Path("data/anglers_catches.db")
 DEFAULT_STATISTICS_JSON = Path("data/statistics.json")
 DEFAULT_DETAIL_STATISTICS_JSON = Path("data/detail_statistics.json")
 DEFAULT_NEXT_6H_DIR = Path("data/next6h")
+DEFAULT_DETAIL_SPOTS_DIR = Path("data/detail_spots")
 PUBLIC_PATHS = {
     "/",
     "/index.html",
@@ -35,7 +36,7 @@ PUBLIC_PATHS = {
     "/data/statistics.json",
     "/data/detail_statistics.json",
 }
-PUBLIC_PREFIXES = ("/data/fish_slices/", "/data/next6h/")
+PUBLIC_PREFIXES = ("/data/fish_slices/", "/data/next6h/", "/data/detail_spots/")
 DEFAULT_MIN_SPOT_COUNT = 100
 
 
@@ -437,11 +438,33 @@ def export_next_6h_statistics(database: Path, output_dir: Path) -> int:
     return written
 
 
+def export_detail_spot_statistics(detail_payload: dict, output_dir: Path) -> int:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for old_file in output_dir.glob("*.json"):
+        old_file.unlink()
+
+    monthly = detail_payload.get("spot_month_top3", {})
+    time_counts = detail_payload.get("spot_fish_time_counts", {})
+    metadata = detail_payload.get("metadata", {})
+    spot_ids = sorted(set(monthly) | set(time_counts), key=lambda value: int(value))
+    for spot_id in spot_ids:
+        write_json(
+            output_dir / f"{spot_id}.json",
+            {
+                "spot_month_top3": monthly.get(spot_id, {}),
+                "spot_fish_time_counts": time_counts.get(spot_id, {}),
+                "metadata": metadata,
+            },
+        )
+    return len(spot_ids)
+
+
 def export_statistics(
     database: Path,
     output: Path,
     detail_output: Path | None = None,
     next_6h_output_dir: Path | None = None,
+    detail_spots_output_dir: Path | None = None,
 ) -> None:
     payload = query_statistics(database)
     write_json(output, payload)
@@ -458,6 +481,10 @@ def export_statistics(
         write_json(effective_detail_output, detail_payload)
         print(f"detail_statistics_json={effective_detail_output}")
         print(f"detail_spots={len(detail_payload.get('spot_month_top3', {}))}")
+        if detail_spots_output_dir is not None:
+            written = export_detail_spot_statistics(detail_payload, detail_spots_output_dir)
+            print(f"detail_spots_dir={detail_spots_output_dir}")
+            print(f"detail_spot_files={written}")
     if next_6h_output_dir is not None:
         written = export_next_6h_statistics(database, next_6h_output_dir)
         print(f"next_6h_dir={next_6h_output_dir}")
@@ -596,6 +623,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="これから6時間Top3の分割JSONを書き出すディレクトリ。",
     )
+    parser.add_argument(
+        "--export-detail-spots-dir",
+        type=Path,
+        default=None,
+        help="ポイント別の詳細集計JSONを書き出すディレクトリ。",
+    )
     return parser.parse_args()
 
 
@@ -608,6 +641,8 @@ def main() -> None:
             args.export_detail_statistics,
             args.export_next_6h_dir
             or args.export_statistics.with_name(DEFAULT_NEXT_6H_DIR.name),
+            args.export_detail_spots_dir
+            or args.export_statistics.with_name(DEFAULT_DETAIL_SPOTS_DIR.name),
         )
         return
     print_startup_summary(args.database)

@@ -2,7 +2,7 @@ const app = document.querySelector("#app");
 const headerControls = document.querySelector("#header-controls");
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 const ENABLE_FISH_ILLUSTRATIONS = true;
-const APP_ASSET_VERSION = "20260630-popup-sticky-link-v1";
+const APP_ASSET_VERSION = "20260630-split-detail-load-v1";
 const STATIC_STATISTICS_URL = new URL(
   `./data/statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -11,6 +11,7 @@ const STATIC_DETAIL_STATISTICS_URL = new URL(
   `./data/detail_statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
 ).toString();
+const STATIC_DETAIL_SPOTS_BASE_URL = new URL("./data/detail_spots/", window.location.href).toString();
 const STATIC_NEXT_6H_BASE_URL = new URL("./data/next6h/", window.location.href).toString();
 const STATIC_ILLUSTRATIONS_URL = new URL(
   `./data/fish_illustrations.json?v=${APP_ASSET_VERSION}`,
@@ -43,6 +44,7 @@ let DETAIL_STATISTICS_LOADED = false;
 let NEXT_6H_STATISTICS_LOADED = false;
 let next6hStatisticsPromise = null;
 let detailStatisticsPromise = null;
+const spotDetailStatisticsPromises = new Map();
 let selectedSpotId = null;
 
 const state = {
@@ -849,6 +851,10 @@ function nextSixHourStatisticsUrl(date = new Date()) {
   return `${STATIC_NEXT_6H_BASE_URL}${month}-${period}-${hour}.json?v=${APP_ASSET_VERSION}`;
 }
 
+function spotDetailStatisticsUrl(spotId) {
+  return `${STATIC_DETAIL_SPOTS_BASE_URL}${encodeURIComponent(spotId)}.json?v=${APP_ASSET_VERSION}`;
+}
+
 function nextSixHourTopFishForSpot(spotId, date = new Date()) {
   const items = DETAIL_NEXT_6H_TOP3[spotId] || [];
   return items
@@ -956,7 +962,7 @@ function renderPopupNextSixHourGraphs(spotId, items) {
   if (!items.length) {
     return '<p class="next-6h-empty next-6h-empty-compact">この時間帯の実績はまだありません</p>';
   }
-  if (!DETAIL_STATISTICS_LOADED) {
+  if (!DETAIL_SPOT_FISH_TIME_COUNTS[spotId]) {
     return '<p class="next-6h-empty next-6h-empty-compact">グラフを読み込んでいます</p>';
   }
   const timeCountsByFish = DETAIL_SPOT_FISH_TIME_COUNTS[spotId] || {};
@@ -999,6 +1005,42 @@ async function loadDetailStatistics() {
   } catch (error) {
     detailStatisticsPromise = null;
     DETAIL_STATISTICS_LOADED = false;
+    throw error;
+  }
+}
+
+async function loadSpotDetailStatistics(spotId) {
+  if (DETAIL_SPOT_FISH_TIME_COUNTS[spotId] && DETAIL_MONTHLY_TOP3[spotId]) {
+    return {
+      spot_month_top3: DETAIL_MONTHLY_TOP3[spotId],
+      spot_fish_time_counts: DETAIL_SPOT_FISH_TIME_COUNTS[spotId],
+      metadata: DETAIL_STATISTICS_METADATA
+    };
+  }
+  if (spotDetailStatisticsPromises.has(spotId)) {
+    return spotDetailStatisticsPromises.get(spotId);
+  }
+  const promise = (async () => {
+    const response = await fetch(spotDetailStatisticsUrl(spotId), { cache: "no-store" });
+    if (!response.ok) {
+      await loadDetailStatistics();
+      return {
+        spot_month_top3: DETAIL_MONTHLY_TOP3[spotId] || {},
+        spot_fish_time_counts: DETAIL_SPOT_FISH_TIME_COUNTS[spotId] || {},
+        metadata: DETAIL_STATISTICS_METADATA
+      };
+    }
+    const payload = await response.json();
+    DETAIL_MONTHLY_TOP3[spotId] = payload.spot_month_top3 || {};
+    DETAIL_SPOT_FISH_TIME_COUNTS[spotId] = payload.spot_fish_time_counts || {};
+    DETAIL_STATISTICS_METADATA = payload.metadata || DETAIL_STATISTICS_METADATA;
+    return payload;
+  })();
+  spotDetailStatisticsPromises.set(spotId, promise);
+  try {
+    return await promise;
+  } catch (error) {
+    spotDetailStatisticsPromises.delete(spotId);
     throw error;
   }
 }
@@ -1408,14 +1450,14 @@ function renderSpotBottomSheet() {
       renderSpotBottomSheet();
     });
   });
-  if (!DETAIL_STATISTICS_LOADED) {
-    loadDetailStatistics()
+  if (!DETAIL_SPOT_FISH_TIME_COUNTS[selectedSpotId]) {
+    const requestedSpotId = selectedSpotId;
+    loadSpotDetailStatistics(requestedSpotId)
       .then(() => {
-        if (selectedSpotId) renderSpotBottomSheet();
+        if (selectedSpotId === requestedSpotId) renderSpotBottomSheet();
       })
       .catch(() => {
-        DETAIL_SPOT_FISH_TIME_COUNTS = {};
-        DETAIL_STATISTICS_METADATA = {};
+        DETAIL_SPOT_FISH_TIME_COUNTS[requestedSpotId] = {};
       });
   }
 }
@@ -1453,11 +1495,10 @@ function renderDetailScreen(spotId) {
     </article>
   `;
 
-  loadDetailStatistics()
+  loadSpotDetailStatistics(spotId)
     .catch(() => {
-      DETAIL_MONTHLY_TOP3 = {};
-      DETAIL_SPOT_FISH_TIME_COUNTS = {};
-      DETAIL_STATISTICS_METADATA = {};
+      DETAIL_MONTHLY_TOP3[spotId] = {};
+      DETAIL_SPOT_FISH_TIME_COUNTS[spotId] = {};
     })
     .finally(() => {
       if (selectedSpotId !== spotId) return;
@@ -1629,6 +1670,44 @@ function route() {
 
 window.addEventListener("hashchange", route);
 
+async function loadOptionalAssets() {
+  try {
+    const illustrationResponse = await fetch(STATIC_ILLUSTRATIONS_URL, {
+      cache: "no-store"
+    });
+    if (illustrationResponse.ok) {
+      FISH_ILLUSTRATION_PATHS = await illustrationResponse.json();
+    }
+  } catch (_error) {
+    FISH_ILLUSTRATION_PATHS = {};
+  }
+
+  try {
+    const affiliateFallbackResponse = await fetch(STATIC_AFFILIATE_FALLBACKS_URL, {
+      cache: "no-store"
+    });
+    if (affiliateFallbackResponse.ok) {
+      FISH_AFFILIATE_FALLBACKS = expandAffiliateFallbackGroups(
+        await affiliateFallbackResponse.json()
+      );
+    }
+  } catch (_error) {
+    FISH_AFFILIATE_FALLBACKS = {};
+  }
+
+  try {
+    const affiliateResponse = await fetch(STATIC_AFFILIATE_URL, {
+      cache: "no-store"
+    });
+    if (affiliateResponse.ok) {
+      const affiliatePayload = await affiliateResponse.json();
+      FISH_AFFILIATE_URLS = affiliatePayload.fish_affiliate_urls || {};
+    }
+  } catch (_error) {
+    FISH_AFFILIATE_URLS = {};
+  }
+}
+
 async function loadStatistics() {
   app.innerHTML = `
     <section class="not-found">
@@ -1638,42 +1717,6 @@ async function loadStatistics() {
   `;
 
   try {
-    try {
-      const illustrationResponse = await fetch(STATIC_ILLUSTRATIONS_URL, {
-        cache: "no-store"
-      });
-      if (illustrationResponse.ok) {
-        FISH_ILLUSTRATION_PATHS = await illustrationResponse.json();
-      }
-    } catch (_error) {
-      FISH_ILLUSTRATION_PATHS = {};
-    }
-
-    try {
-      const affiliateResponse = await fetch(STATIC_AFFILIATE_URL, {
-        cache: "no-store"
-      });
-      if (affiliateResponse.ok) {
-        const affiliatePayload = await affiliateResponse.json();
-        FISH_AFFILIATE_URLS = affiliatePayload.fish_affiliate_urls || {};
-      }
-    } catch (_error) {
-      FISH_AFFILIATE_URLS = {};
-    }
-
-    try {
-      const affiliateFallbackResponse = await fetch(STATIC_AFFILIATE_FALLBACKS_URL, {
-        cache: "no-store"
-      });
-      if (affiliateFallbackResponse.ok) {
-        FISH_AFFILIATE_FALLBACKS = expandAffiliateFallbackGroups(
-          await affiliateFallbackResponse.json()
-        );
-      }
-    } catch (_error) {
-      FISH_AFFILIATE_FALLBACKS = {};
-    }
-
     let response = await fetch(STATIC_STATISTICS_URL, { cache: "no-store" });
     if (!response.ok) {
       response = await fetch(API_STATISTICS_URL, { cache: "no-store" });
@@ -1703,6 +1746,7 @@ async function loadStatistics() {
 
     renderHeaderControls();
     route();
+    loadOptionalAssets();
   } catch (error) {
     app.innerHTML = `
       <section class="not-found">
