@@ -2,7 +2,7 @@ const app = document.querySelector("#app");
 const headerControls = document.querySelector("#header-controls");
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 const ENABLE_FISH_ILLUSTRATIONS = true;
-const APP_ASSET_VERSION = "20260630-map-summary-v1";
+const APP_ASSET_VERSION = "20260630-map-summary-v2";
 const STATIC_MAP_SUMMARY_URL = new URL(
   `./data/map_summary.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -37,6 +37,7 @@ const API_DETAIL_STATISTICS_URL = new URL(
 let SPOTS = [];
 let CATCH_RECORDS = [];
 let SPOT_TOTAL_COUNTS = new Map();
+let SUMMARY_MONTH_FISH_TOP = {};
 let MAP_SUMMARY_LOADED = false;
 let FULL_STATISTICS_LOADED = false;
 let fullStatisticsPromise = null;
@@ -163,6 +164,10 @@ function recordsForSpot(spotId) {
   const spot = SPOTS.find((item) => item.id === spotId);
   if (!spot) return [];
   return CATCH_RECORDS.filter((record) => record.spot_id === spotId);
+}
+
+function summarySpotTotalCount(spotId) {
+  return SPOT_TOTAL_COUNTS.get(spotId) || 0;
 }
 
 function sumCounts(records) {
@@ -1405,7 +1410,10 @@ function currentActiveMonth() {
 
 function nationwideMonthAffiliateCards(limit = 10) {
   const month = currentActiveMonth();
-  const ranking = aggregateFish(CATCH_RECORDS.filter((record) => record.month === month));
+  const ranking =
+    !FULL_STATISTICS_LOADED && SUMMARY_MONTH_FISH_TOP[String(month)]
+      ? SUMMARY_MONTH_FISH_TOP[String(month)]
+      : aggregateFish(CATCH_RECORDS.filter((record) => record.month === month));
   return ranking
     .slice(0, limit)
     .flatMap((item) => pickAffiliateCards(item.fish, 2))
@@ -1422,9 +1430,9 @@ function heatmapIntensity(count, maxCount) {
 function renderSpotPopupContent(spotId) {
   const spot = SPOTS.find((item) => item.id === spotId);
   const records = recordsForSpot(spotId);
-  if (!spot || records.length === 0) return "";
+  if (!spot) return "";
 
-  const total = sumCounts(records);
+  const total = records.length > 0 ? sumCounts(records) : summarySpotTotalCount(spotId);
   const nextSixHourItems = nextSixHourTopFishForSpot(spotId);
   const nextSixHourContent = NEXT_6H_STATISTICS_LOADED
     ? renderPopupNextSixHourGraphs(spotId, nextSixHourItems)
@@ -1701,12 +1709,14 @@ function route() {
 window.addEventListener("hashchange", route);
 
 async function loadOptionalAssets() {
+  let changed = false;
   try {
     const illustrationResponse = await fetch(STATIC_ILLUSTRATIONS_URL, {
       cache: "no-store"
     });
     if (illustrationResponse.ok) {
       FISH_ILLUSTRATION_PATHS = await illustrationResponse.json();
+      changed = true;
     }
   } catch (_error) {
     FISH_ILLUSTRATION_PATHS = {};
@@ -1720,6 +1730,7 @@ async function loadOptionalAssets() {
       FISH_AFFILIATE_FALLBACKS = expandAffiliateFallbackGroups(
         await affiliateFallbackResponse.json()
       );
+      changed = true;
     }
   } catch (_error) {
     FISH_AFFILIATE_FALLBACKS = {};
@@ -1732,15 +1743,20 @@ async function loadOptionalAssets() {
     if (affiliateResponse.ok) {
       const affiliatePayload = await affiliateResponse.json();
       FISH_AFFILIATE_URLS = affiliatePayload.fish_affiliate_urls || {};
+      changed = true;
     }
   } catch (_error) {
     FISH_AFFILIATE_URLS = {};
+  }
+  if (changed && !window.location.hash.match(/^#\/spot\/([^/]+)$/)) {
+    renderMapScreen();
   }
 }
 
 function applyStatisticsPayload(payload) {
   SPOTS = payload.spots || [];
   CATCH_RECORDS = payload.catches || [];
+  SUMMARY_MONTH_FISH_TOP = {};
   SPOT_TOTAL_COUNTS = new Map();
   CATCH_RECORDS.forEach((record) => {
     SPOT_TOTAL_COUNTS.set(
@@ -1763,6 +1779,7 @@ function applyMapSummaryPayload(payload) {
     SPOT_TOTAL_COUNTS.set(spot.id, Number(spot.total_count) || 0);
   });
   fishNames = payload.fish_names || [];
+  SUMMARY_MONTH_FISH_TOP = payload.month_fish_top || {};
   MAP_SUMMARY_LOADED = true;
 }
 
