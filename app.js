@@ -2,7 +2,11 @@ const app = document.querySelector("#app");
 const headerControls = document.querySelector("#header-controls");
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 const ENABLE_FISH_ILLUSTRATIONS = true;
-const APP_ASSET_VERSION = "20260630-split-detail-load-v1";
+const APP_ASSET_VERSION = "20260630-map-summary-v1";
+const STATIC_MAP_SUMMARY_URL = new URL(
+  `./data/map_summary.json?v=${APP_ASSET_VERSION}`,
+  window.location.href
+).toString();
 const STATIC_STATISTICS_URL = new URL(
   `./data/statistics.json?v=${APP_ASSET_VERSION}`,
   window.location.href
@@ -33,6 +37,9 @@ const API_DETAIL_STATISTICS_URL = new URL(
 let SPOTS = [];
 let CATCH_RECORDS = [];
 let SPOT_TOTAL_COUNTS = new Map();
+let MAP_SUMMARY_LOADED = false;
+let FULL_STATISTICS_LOADED = false;
+let fullStatisticsPromise = null;
 let FISH_ILLUSTRATION_PATHS = {};
 let FISH_AFFILIATE_URLS = {};
 let FISH_AFFILIATE_FALLBACKS = {};
@@ -171,7 +178,26 @@ function filteredRecords() {
   });
 }
 
+function canUseSummaryForCurrentFilter() {
+  return state.fishQuery === "";
+}
+
 function aggregateSpots(records) {
+  if (!FULL_STATISTICS_LOADED && canUseSummaryForCurrentFilter()) {
+    return SPOTS.map((spot) => {
+      const count =
+        state.month === "all"
+          ? Number(spot.total_count) || 0
+          : Number(spot.month_counts?.[String(state.month)]) || 0;
+      return {
+        ...spot,
+        count,
+        totalCount: SPOT_TOTAL_COUNTS.get(spot.id) || Number(spot.total_count) || 0
+      };
+    }).filter(
+      (spot) => spot.count > 0 && (spot.totalCount || 0) >= state.minSpotCount
+    );
+  }
   const counts = new Map();
   records.forEach((record) => {
     counts.set(record.spot_id, (counts.get(record.spot_id) || 0) + record.count);
@@ -798,6 +824,10 @@ function renderHeaderControls() {
   `;
   document.querySelector("#fish-filter").addEventListener("input", (event) => {
     state.fishQuery = event.target.value.trim();
+    if (state.fishQuery && !FULL_STATISTICS_LOADED) {
+      loadFullStatistics().finally(renderMapScreen);
+      return;
+    }
     renderMapScreen();
   });
   document.querySelector("#month-filter").addEventListener("change", (event) => {
@@ -1495,7 +1525,7 @@ function renderDetailScreen(spotId) {
     </article>
   `;
 
-  loadSpotDetailStatistics(spotId)
+  Promise.all([loadSpotDetailStatistics(spotId), loadFullStatistics()])
     .catch(() => {
       DETAIL_MONTHLY_TOP3[spotId] = {};
       DETAIL_SPOT_FISH_TIME_COUNTS[spotId] = {};
@@ -1708,6 +1738,57 @@ async function loadOptionalAssets() {
   }
 }
 
+function applyStatisticsPayload(payload) {
+  SPOTS = payload.spots || [];
+  CATCH_RECORDS = payload.catches || [];
+  SPOT_TOTAL_COUNTS = new Map();
+  CATCH_RECORDS.forEach((record) => {
+    SPOT_TOTAL_COUNTS.set(
+      record.spot_id,
+      (SPOT_TOTAL_COUNTS.get(record.spot_id) || 0) + record.count
+    );
+  });
+  if (CATCH_RECORDS.length > 0) {
+    fishNames = [...new Set(CATCH_RECORDS.map((record) => record.fish_name))].sort(
+      (a, b) => a.localeCompare(b, "ja")
+    );
+  }
+}
+
+function applyMapSummaryPayload(payload) {
+  SPOTS = payload.spots || [];
+  CATCH_RECORDS = [];
+  SPOT_TOTAL_COUNTS = new Map();
+  SPOTS.forEach((spot) => {
+    SPOT_TOTAL_COUNTS.set(spot.id, Number(spot.total_count) || 0);
+  });
+  fishNames = payload.fish_names || [];
+  MAP_SUMMARY_LOADED = true;
+}
+
+async function loadFullStatistics() {
+  if (FULL_STATISTICS_LOADED) return;
+  if (fullStatisticsPromise) return fullStatisticsPromise;
+  fullStatisticsPromise = (async () => {
+    let response = await fetch(STATIC_STATISTICS_URL, { cache: "no-store" });
+    if (!response.ok) {
+      response = await fetch(API_STATISTICS_URL, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`統計データがHTTP ${response.status}を返しました。`);
+      }
+    }
+    const payload = await response.json();
+    applyStatisticsPayload(payload);
+    FULL_STATISTICS_LOADED = true;
+  })();
+  try {
+    return await fullStatisticsPromise;
+  } catch (error) {
+    fullStatisticsPromise = null;
+    throw error;
+  }
+}
+
 async function loadStatistics() {
   app.innerHTML = `
     <section class="not-found">
@@ -1717,33 +1798,18 @@ async function loadStatistics() {
   `;
 
   try {
-    let response = await fetch(STATIC_STATISTICS_URL, { cache: "no-store" });
+    let response = await fetch(STATIC_MAP_SUMMARY_URL, { cache: "no-store" });
     if (!response.ok) {
-      response = await fetch(API_STATISTICS_URL, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(`統計データがHTTP ${response.status}を返しました。`);
-      }
+      await loadFullStatistics();
+    } else {
+      applyMapSummaryPayload(await response.json());
     }
-    const payload = await response.json();
-    SPOTS = payload.spots || [];
-    CATCH_RECORDS = payload.catches || [];
-    SPOT_TOTAL_COUNTS = new Map();
-    CATCH_RECORDS.forEach((record) => {
-      SPOT_TOTAL_COUNTS.set(
-        record.spot_id,
-        (SPOT_TOTAL_COUNTS.get(record.spot_id) || 0) + record.count
-      );
-    });
     try {
       await loadNext6hStatistics();
     } catch (_error) {
       DETAIL_NEXT_6H_TOP3 = {};
       NEXT_6H_STATISTICS_LOADED = false;
     }
-    fishNames = [...new Set(CATCH_RECORDS.map((record) => record.fish_name))].sort(
-      (a, b) => a.localeCompare(b, "ja")
-    );
-
     renderHeaderControls();
     route();
     loadOptionalAssets();

@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from fish_name_aliases import load_fish_name_aliases, normalize_fish_name
 
 DEFAULT_DATABASE = Path("data/anglers_catches.db")
+DEFAULT_MAP_SUMMARY_JSON = Path("data/map_summary.json")
 DEFAULT_STATISTICS_JSON = Path("data/statistics.json")
 DEFAULT_DETAIL_STATISTICS_JSON = Path("data/detail_statistics.json")
 DEFAULT_NEXT_6H_DIR = Path("data/next6h")
@@ -33,6 +34,7 @@ PUBLIC_PATHS = {
     "/data/fish_illustrations.json",
     "/data/affiliate_url.json",
     "/data/affiliate_fallbacks.json",
+    "/data/map_summary.json",
     "/data/statistics.json",
     "/data/detail_statistics.json",
 }
@@ -459,6 +461,51 @@ def export_detail_spot_statistics(detail_payload: dict, output_dir: Path) -> int
     return len(spot_ids)
 
 
+def build_map_summary(statistics_payload: dict) -> dict:
+    spot_totals: dict[str, int] = {}
+    spot_month_totals: dict[str, dict[str, int]] = {}
+    fish_names: set[str] = set()
+    month_fish_totals: dict[str, dict[str, int]] = {}
+
+    for record in statistics_payload.get("catches", []):
+        spot_id = str(record["spot_id"])
+        fish_name = str(record["fish_name"])
+        month = str(record["month"])
+        count = int(record["count"])
+        fish_names.add(fish_name)
+        spot_totals[spot_id] = spot_totals.get(spot_id, 0) + count
+        month_counts = spot_month_totals.setdefault(spot_id, {})
+        month_counts[month] = month_counts.get(month, 0) + count
+        fish_counts = month_fish_totals.setdefault(month, {})
+        fish_counts[fish_name] = fish_counts.get(fish_name, 0) + count
+
+    spots = []
+    for spot in statistics_payload.get("spots", []):
+        spot_id = str(spot["id"])
+        spots.append(
+            {
+                **spot,
+                "total_count": spot_totals.get(spot_id, 0),
+                "month_counts": spot_month_totals.get(spot_id, {}),
+            }
+        )
+
+    month_fish_top = {
+        month: [
+            {"fish": fish, "count": count}
+            for fish, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+        ]
+        for month, counts in month_fish_totals.items()
+    }
+
+    return {
+        "spots": spots,
+        "fish_names": sorted(fish_names),
+        "month_fish_top": month_fish_top,
+        "metadata": statistics_payload.get("metadata", {}),
+    }
+
+
 def export_statistics(
     database: Path,
     output: Path,
@@ -468,6 +515,9 @@ def export_statistics(
 ) -> None:
     payload = query_statistics(database)
     write_json(output, payload)
+    summary_output = output.with_name(DEFAULT_MAP_SUMMARY_JSON.name)
+    write_json(summary_output, build_map_summary(payload))
+    print(f"map_summary_json={summary_output}")
     print(f"statistics_json={output}")
     print(f"spots={len(payload['spots'])}")
     print(f"catch_groups={len(payload['catches'])}")
